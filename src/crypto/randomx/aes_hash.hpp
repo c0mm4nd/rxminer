@@ -36,11 +36,13 @@ void hashAes1Rx4(const void *input, size_t inputSize, void *hash);
 template<bool softAes>
 void fillAes1Rx4(void *state, size_t outputSize, void *buffer);
 
+// state and buffer must be at least 16-byte aligned; outputSize is a multiple of 64.
 template<bool softAes>
 void fillAes4Rx4(void *state, size_t outputSize, void *buffer);
 
 // Program-only variant: preserve the 128-byte entropy header and constrain
 // instruction src/dst to 0..7 in the output, never in the AES feedback state.
+// The same alignment requirements as fillAes4Rx4 apply.
 template<bool softAes>
 void fillAes4Rx4Program(void *state, size_t outputSize, void *buffer);
 

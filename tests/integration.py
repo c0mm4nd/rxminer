@@ -44,6 +44,14 @@ def process(args, log):
         child = subprocess.Popen(args, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
         try:
             yield child
+        except BaseException:
+            # Temporary logs are deleted when the test exits. Preserve useful
+            # startup and failure context in CI without dumping every share.
+            output.flush()
+            lines = log.read_text(errors="replace").splitlines()
+            excerpt = lines if len(lines) <= 80 else lines[:40] + ["..."] + lines[-40:]
+            print(f"Failure log ({log.name}):\n" + "\n".join(excerpt), flush=True)
+            raise
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGINT)
@@ -163,7 +171,12 @@ def main():
                     except urllib.error.HTTPError as error:
                         assert error.code == 404
                     accepted = [line for line in pool_log.read_text().splitlines() if "share accepted wallet=" in line]
-                    assert accepted and "wallet=46fca3" in accepted[0], accepted[:1]
+                    # User/developer shares use independent TCP connections.
+                    # Their arrival order cannot establish which fee phase ran
+                    # first; the scheduler unit test checks that invariant.
+                    # Require both streams and unique nonces across fee windows.
+                    wallets = {line.split("wallet=", 1)[1].split()[0] for line in accepted}
+                    assert wallets == {"test-wallet", data["dev_fee"]["address"]}, wallets
                     unique = set()
                     for line in accepted:
                         payload = line.split("wallet=", 1)[1]

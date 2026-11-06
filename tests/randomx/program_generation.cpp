@@ -26,7 +26,9 @@ static unsigned check() {
         alignas(64) unsigned char seed[64], saved[64];
         for (unsigned i = 0; i < sizeof(seed); ++i) seed[i] = (n * 37 + i * 13) ^ (i + n);
         std::memcpy(saved, seed, sizeof(seed));
-        randomx::Program reference{};
+        // AES generation uses aligned SIMD stores. Program's natural alignment
+        // is only 8 bytes; match the VM's explicitly aligned program storage.
+        alignas(64) randomx::Program reference{};
         fillAes4Rx4<softAes>(seed, sizeof(reference), &reference);
         for (bool v2 : {false, true, false, true}) {
             if (v2) vm.setFlagV2(); else vm.clearFlagV2();
