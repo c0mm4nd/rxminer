@@ -3,9 +3,10 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use percent_encoding::percent_decode_str;
 use std::{
     env,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{IpAddr, TcpStream},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -174,7 +175,7 @@ impl Proxy {
 
     fn handshake(
         &self,
-        stream: &mut TcpStream,
+        stream: &mut (impl Read + Write),
         target: &PoolAddress,
         dns: crate::dns::Options,
         stopped: impl Fn() -> bool,
@@ -297,6 +298,48 @@ pub fn connect(target: &PoolAddress, proxy: Option<&Proxy>) -> Result<TcpStream>
     )
 }
 
+// Handshake reads preserve partial replies while polling cancellation. In
+// particular, Windows shutdown on a cloned socket need not wake a blocked read.
+struct HandshakeIo<'a> {
+    stream: &'a TcpStream,
+    stopped: &'a dyn Fn() -> bool,
+    deadline: Instant,
+}
+impl HandshakeIo<'_> {
+    fn perform<T>(&self, mut operation: impl FnMut(&TcpStream) -> io::Result<T>) -> io::Result<T> {
+        loop {
+            if (self.stopped)() {
+                return Err(io::Error::other("proxy handshake interrupted"));
+            }
+            if Instant::now() >= self.deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "proxy handshake timed out",
+                ));
+            }
+            match operation(self.stream) {
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+impl Read for HandshakeIo<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.perform(|mut stream| stream.read(buffer))
+    }
+}
+impl Write for HandshakeIo<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.perform(|mut stream| stream.write(buffer))
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(()) // TcpStream has no user-space write buffer.
+    }
+}
+
 pub(crate) fn connect_interruptible(
     target: &PoolAddress,
     proxy: Option<&Proxy>,
@@ -312,14 +355,25 @@ pub(crate) fn connect_interruptible(
     for address in crate::dns::resolve(host, port, dns, &stopped)? {
         ensure!(!stopped(), "connection interrupted");
         match TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 ensure!(!stopped(), "connection interrupted");
                 register(&stream)?;
                 stream.set_nodelay(true)?;
                 stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                 stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                 if let Some(proxy) = proxy {
-                    proxy.handshake(&mut stream, target, dns, &stopped)?;
+                    stream.set_nonblocking(true)?;
+                    proxy.handshake(
+                        &mut HandshakeIo {
+                            stream: &stream,
+                            stopped: &stopped,
+                            deadline: Instant::now() + Duration::from_secs(5),
+                        },
+                        target,
+                        dns,
+                        &stopped,
+                    )?;
+                    stream.set_nonblocking(false)?;
                 }
                 return Ok(stream);
             }

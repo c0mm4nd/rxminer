@@ -22,7 +22,8 @@ for remaining features.
 ### Requirements
 
 - Rust 1.88 or newer and Cargo.
-- A C/C++ compiler, `pkg-config`, and OpenSSL development headers.
+- A native C/C++ toolchain and OpenSSL development libraries;
+  see [platform dependencies](docs/PLATFORMS.md#dependencies).
 
 On Debian or Ubuntu, install the native build dependencies with:
 

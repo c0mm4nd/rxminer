@@ -85,7 +85,8 @@ Each worker owns its VM and shares an initialized dataset through `Arc`.
 Seed changes join workers before replacing datasets. Hash counts are flushed
 on exit, and unchanged jobs preserve nonce progress across fee windows.
 Worker failures notify the coordinator and roll back partially started work.
-Cancellation closes registered sockets to wake blocked network I/O.
+TLS and proxy handshakes poll cancellation with bounded deadlines. Stopping
+also shuts down registered sockets.
 
 Tests cover known hash vectors, raw and normalized JIT paths, v1/v2 switching,
 full-memory/light-VM agreement, secure JIT, worker failures and task changes.

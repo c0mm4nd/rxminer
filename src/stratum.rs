@@ -3,7 +3,7 @@ use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
 use openssl::{
     hash::MessageDigest,
-    ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion},
+    ssl::{HandshakeError, SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion},
 };
 use serde_json::{json, Value};
 use std::{
@@ -238,9 +238,27 @@ impl Transport {
         }
         let mut ssl = connector.build().configure()?;
         ssl.set_verify_hostname(options.tls.verify);
-        let stream = ssl
-            .connect(&options.address.host, tcp)
-            .context("TLS handshake")?;
+        // Resume the same TLS state after WouldBlock. Polling avoids relying
+        // on cross-thread shutdown to wake a blocking read on every OS.
+        tcp.set_nonblocking(true)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut handshake = ssl.connect(&options.address.host, tcp);
+        let stream = loop {
+            ensure!(
+                !stop.stopped() && !control.stopped(),
+                "TLS handshake interrupted"
+            );
+            match handshake {
+                Ok(stream) => break stream,
+                Err(HandshakeError::WouldBlock(pending)) => {
+                    ensure!(Instant::now() < deadline, "TLS handshake timed out");
+                    thread::sleep(Duration::from_millis(10));
+                    handshake = pending.handshake();
+                }
+                Err(error) => return Err(error).context("TLS handshake"),
+            }
+        };
+        stream.get_ref().set_nonblocking(false)?;
         if !options.tls.fingerprint.is_empty() {
             let cert = stream
                 .ssl()
@@ -474,7 +492,11 @@ mod tests {
             assert!(peer.read(&mut [0; 1024]).unwrap() > 0); // handshake began
             let start = Instant::now();
             client.stop();
-            assert!(start.elapsed() < Duration::from_secs(2), "shutdown stalled");
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "shutdown stalled (proxy={proxy}): {:?}",
+                start.elapsed()
+            );
             assert!(!client.state.connected.load(Ordering::Acquire));
         }
     }

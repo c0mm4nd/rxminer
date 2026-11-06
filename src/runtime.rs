@@ -99,39 +99,15 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        replace_file(&temporary, &path)?;
+        // Rust 1.88 already handles Windows replacement while readers hold
+        // the old file open, using FileRenameInfoEx when MoveFileEx fails.
+        fs::rename(&temporary, &path)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
-}
-
-#[cfg(not(windows))]
-fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::rename(from, to)
-}
-#[cfg(windows)]
-fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    // SAFETY: both paths are valid nul-terminated UTF-16 arrays for the duration of the call.
-    if unsafe {
-        MoveFileExW(
-            from.as_ptr(),
-            to.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 fn autosave(options: &Options, cli: &Cli) -> Result<()> {
