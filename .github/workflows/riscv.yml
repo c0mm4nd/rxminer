@@ -1,0 +1,62 @@
+name: RISC-V native baseline
+
+# Enable automatic runs after the first native validation.
+# Install the RISE personal-account app for this repository before dispatching.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riscv-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  riscv64:
+    name: Linux RISC-V64 interpreter baseline
+    runs-on: ubuntu-24.04-riscv
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: '2'
+      RXMINER_ARCH: default
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify native architecture and install dependencies
+        run: |
+          test "$(uname -m)" = riscv64
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+      - name: Native Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup override set stable
+          rustc -vV
+          rustc -vV | grep -Eq '^host: riscv64(gc|a23)-unknown-linux-gnu$'
+      - name: Formatting and Rust lint checks
+        timeout-minutes: 40
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
+      - name: Known RandomX hash and pipelined hashing
+        timeout-minutes: 40
+        run: cargo test --locked --release --lib randomx::tests::ffi_pipeline_matches_consensus_vector_and_single_hashes -- --exact --nocapture
+      - name: CLI and configuration
+        timeout-minutes: 15
+        run: cargo test --locked --release --test portable cli_version_and_configuration -- --exact --nocapture
+      - name: Cargo installation and offline light-mode hashing
+        timeout-minutes: 20
+        run: |
+          cargo install --path . --locked --root "$RUNNER_TEMP/rxminer-install"
+          "$RUNNER_TEMP/rxminer-install/bin/rxminer" --version
+          timeout --kill-after=10s 10m "$RUNNER_TEMP/rxminer-install/bin/rxminer" \
+            --benchmark-seconds 1 --randomx-mode light --threads 1 \
+            --randomx-no-numa --no-huge-pages --no-proxy \
+            2>&1 | tee "$RUNNER_TEMP/rxminer-riscv-smoke.log"
+          grep -Eq 'benchmark finished: [1-9][0-9]* hashes' "$RUNNER_TEMP/rxminer-riscv-smoke.log"

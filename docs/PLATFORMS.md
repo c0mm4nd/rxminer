@@ -58,9 +58,35 @@ GPU mining and other algorithms are not part of this port. RISC-V and Windows
 ARM64 have not been validated. Release archives remain Linux x86-64 only;
 other platforms use Cargo installation.
 
+## RISC-V bring-up
+
+The separate [RISC-V native baseline workflow](../.github/workflows/riscv.yml)
+is ready for manual dispatch through RISE's `ubuntu-24.04-riscv` runner.
+Native execution has not yet been verified. The current backend is the portable
+interpreter; RV64 JIT and vector/crypto acceleration are not integrated.
+
+For a personal repository, install the
+[RISE personal-account GitHub App](https://github.com/apps/rise-risc-v-runners-personal)
+and grant access only to the intended repository. The service requires repository
+Administration read/write to register ephemeral runners, plus Metadata read;
+see the [provider's installation guide](https://riscv-runners.riseproject.dev/docs/getting-started/install.html).
+Once installed, open Actions, select **RISC-V native baseline**, and use
+**Run workflow** on `main`. A maintainer can also run:
+
+```bash
+gh workflow run riscv.yml --ref main
+```
+
+This initial job checks native compilation, a known RandomX hash, pipelined
+hashing, CLI configuration, Cargo installation and positive offline light-mode
+hash counts. It uses no pool connection. JIT, full datasets, performance and
+instruction-extension coverage remain separate follow-up work. Automatic runs
+will be enabled after native validation; the existing platform matrix stays
+independent of this experimental runner.
+
 ## Validation
 
-Every new CI target runs Rust checks, known hash vectors, JIT/interpreter
+The five verified platform targets above run Rust checks, known hash vectors, JIT/interpreter
 agreement, full-memory and light-mode mining, and local Cargo installation.
 Full-memory shares are checked against the light interpreter across concurrent
 job updates, developer-fee switches and seed changes. Worker startup failures
