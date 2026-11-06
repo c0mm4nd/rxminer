@@ -138,7 +138,7 @@ void fillAes1Rx4(void *state, size_t outputSize, void *buffer) {
 	assert(outputSize % 64 == 0);
 
 #if defined(RANDOMX_HAVE_VAES) && (defined(__x86_64__) || defined(__i386__))
-	if (!softAes && __builtin_cpu_supports("vaes")) {
+	if (!softAes && randomx::cpu.hasVaes()) {
 		rxm_fillAes1Rx4_vaes(state, outputSize, buffer);
 		return;
 	}
@@ -216,7 +216,7 @@ static void fillAes4Rx4Impl(void *state, size_t outputSize, void *buffer) {
 	assert(!normalized || outputSize >= 128);
 
 #if defined(RANDOMX_HAVE_VAES) && (defined(__x86_64__) || defined(__i386__))
-	if (!softAes && __builtin_cpu_supports("vaes")) {
+	if (!softAes && randomx::cpu.hasVaes()) {
 		rxm_fillAes4Rx4_vaes(state, outputSize, buffer);
 		if (normalized) normalizeProgramOutput(buffer, outputSize);
 		return;
@@ -301,7 +301,7 @@ template void fillAes4Rx4<false>(void *state, size_t outputSize, void *buffer);
 template<bool softAes>
 void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state) {
 #if defined(RANDOMX_HAVE_VAES) && (defined(__x86_64__) || defined(__i386__))
-	if (!softAes && __builtin_cpu_supports("vaes")) {
+	if (!softAes && randomx::cpu.hasVaes()) {
 		rxm_hashAndFillAes1Rx4_vaes(scratchpad, scratchpadSize, hash, fill_state);
 		return;
 	}

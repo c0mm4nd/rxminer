@@ -21,9 +21,12 @@ build. A native C/C++ toolchain and OpenSSL development libraries are required.
 - macOS: Xcode Command Line Tools, `brew install openssl@3 pkg-config`, and
   `OPENSSL_DIR="$(brew --prefix openssl@3)"` when installing with Cargo.
 - Windows: Rust's MSVC toolchain, Visual Studio C++ Build Tools with the x64
-  assembler, and OpenSSL libraries matching the CRT. CI uses the vcpkg
-  `openssl:x64-windows-static-md` package and sets `VCPKG_ROOT` and
-  `VCPKGRS_TRIPLET=x64-windows-static-md` for Cargo dependency discovery.
+  assembler, and OpenSSL headers and x64 libraries matching the CRT. With a
+  full precompiled OpenSSL installation, set `OPENSSL_DIR` to its root,
+  `OPENSSL_LIB_DIR` to its `lib/VC/x64/MD` directory, and `OPENSSL_STATIC=0`.
+  Add its `bin` directory to `PATH` so the installed miner can load the DLLs.
+  CI validates this installation path. A matching vcpkg installation is also
+  supported by the OpenSSL dependency's discovery mechanism.
 
 The Git installation command in the [README](../README.md#installation) is the
 same on each OS after installing its dependencies. Cross-compilation requires
@@ -59,6 +62,8 @@ other platforms use Cargo installation.
 
 Every new CI target runs Rust checks, known hash vectors, JIT/interpreter
 agreement, full-memory and light-mode mining, and local Cargo installation.
+Full-memory shares are checked against the light interpreter across concurrent
+job updates, developer-fee switches and seed changes.
 The existing Linux x86-64 jobs additionally run the native differential suite,
 local pool/proxy/runtime regressions and fresh Git-install checks.
 

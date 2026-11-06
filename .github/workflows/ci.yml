@@ -91,17 +91,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $root = $env:VCPKG_INSTALLATION_ROOT
-          & "$root/vcpkg.exe" install openssl:x64-windows-static-md
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "VCPKGRS_TRIPLET=x64-windows-static-md" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $root = Join-Path $env:ProgramFiles 'OpenSSL'
+          $lib = Join-Path $root 'lib/VC/x64/MD'
+          foreach ($file in @("$root/include/openssl/ssl.h", "$lib/libssl.lib", "$lib/libcrypto.lib")) {
+            if (!(Test-Path $file)) { throw "Missing preinstalled OpenSSL file: $file" }
+          }
+          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_LIB_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_STATIC=0" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root/bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Rust checks and hash vectors
         run: |
           cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
           cargo test --locked
       - name: JIT and secure JIT consensus
         run: cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
+      - name: Full-memory shares and concurrent job switches
+        run: cargo test --locked --release --lib full_dataset_shares_match_light_vm_across_fee_switches -- --ignored --nocapture
       - name: Light and full-memory mining
         run: cargo test --locked --release --test portable -- --ignored --nocapture
       - name: Cargo installation

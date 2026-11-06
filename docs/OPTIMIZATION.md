@@ -18,7 +18,8 @@ RXMINER_ARCH=native RUSTFLAGS='-C target-cpu=native' cargo build --release --loc
 
 Use the portable build for distribution. Cargo builds the native RandomX
 library directly; CMake, Make and Ninja are not required. The optional `vaes`
-feature enables runtime-dispatched VAES kernels on compatible CPUs. It is off
+feature enables runtime-dispatched VAES kernels on x86-64 with GCC or Clang;
+other targets use the default AES kernels. It is off
 by default and should be measured separately. Never distribute a build with
 `test-dev-fee` enabled.
 

@@ -71,6 +71,7 @@ namespace randomx {
 		std::vector<int32_t> instructionOffsets;
 		int registerUsage[RegistersCount];
 		uint8_t* code;
+		size_t mappedSize;
 		int32_t codePos;
 
 		randomx_flags vmFlags;

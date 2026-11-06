@@ -56,8 +56,7 @@ pub fn summary(cores: &[Core]) -> String {
     )
 }
 
-// Locate the current process's controller and all visible ancestors. Walking
-// ancestors matters for systemd slices and containers with an inherited quota.
+// Estimate dataset replication overhead before enabling NUMA placement.
 pub fn use_numa(cores: &[Core], requested: bool, available: Option<u64>) -> bool {
     let nodes = cores.iter().map(|c| c.node).collect::<BTreeSet<_>>().len();
     if !requested || nodes <= 1 {

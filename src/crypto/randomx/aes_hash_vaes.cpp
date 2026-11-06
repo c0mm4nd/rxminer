@@ -2,7 +2,7 @@
  * VAES 256-bit implementations of the RandomX AES fill/hash helpers.
  *
  * This file is compiled with -mvaes -mavx2 on x86-64 and is only called after
- * a runtime __builtin_cpu_supports("vaes") check.  Each 256-bit VAES operation
+ * a runtime CPU/OS VAES capability check. Each 256-bit VAES operation
  * acts on two independent 128-bit lanes, matching the scalar four-lane code.
  */
 

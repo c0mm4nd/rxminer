@@ -37,11 +37,15 @@ namespace randomx {
 		inline bool hasAes() const { return aes_; }
 		inline bool hasSsse3() const { return ssse3_; }
 		inline bool hasAvx2() const { return avx2_; }
+		inline bool hasBmi2() const { return bmi2_; }
+		inline bool hasVaes() const { return vaes_; }
 
 	private:
 		bool aes_ = false;
 		bool ssse3_ = false;
 		bool avx2_ = false;
+		bool bmi2_ = false;
+		bool vaes_ = false;
 	};
 
 	extern const Cpu cpu;

@@ -38,6 +38,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "reciprocal.h"
 #include "virtual_memory.h"
 #include "soft_aes.h"
+#include "cpu.hpp"
 
 namespace randomx {
 	/*
@@ -305,8 +306,12 @@ namespace randomx {
 
 	JitCompilerX86::JitCompilerX86() {
 #if defined(__GNUC__) || defined(__clang__)
-		hasBmi2 = __builtin_cpu_supports("bmi2");
+		hasBmi2 = cpu.hasBmi2();
+#if defined(__APPLE__)
+		tuneRounding = false;
+#else
 		tuneRounding = __builtin_cpu_is("znver2");
+#endif
 #endif
 		prefetchMode = rxm_get_prefetch_mode();
 		code = (uint8_t*)allocJitMemory(CodeSize, &mappedSize);

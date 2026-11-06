@@ -294,7 +294,7 @@ namespace randomx {
 	}
 
 	JitCompilerX86::JitCompilerX86() {
-		code = (uint8_t*)allocMemoryPages(CodeSize);
+		code = (uint8_t*)allocJitMemory(CodeSize, &mappedSize);
 		if (code == nullptr)
 			throw std::runtime_error("allocMemoryPages");
 		memcpy(code, codePrologue, prologueSize);
@@ -302,7 +302,7 @@ namespace randomx {
 	}
 
 	JitCompilerX86::~JitCompilerX86() {
-		freePagedMemory(code, CodeSize);
+		freePagedMemory(code, mappedSize);
 	}
 
 	void JitCompilerX86::enableAll() {
