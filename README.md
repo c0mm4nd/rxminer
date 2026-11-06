@@ -12,8 +12,8 @@ with an integrated RandomX C/C++ library for hashing and JIT execution.
 - JSON configuration, automatic reload, and an optional authenticated HTTP API.
 - Offline benchmarks and a built-in developer fee below 1%.
 
-Linux x86-64 is supported; Windows x64, macOS and Linux ARM64 ports are being
-validated. See [platform support](docs/PLATFORMS.md) for status and dependencies,
+Runs on Linux (x86-64 and ARM64), macOS (Intel and Apple Silicon), and Windows
+x64 (MSVC). See [platform support](docs/PLATFORMS.md) for setup and system features,
 and [implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
 for remaining features.
 

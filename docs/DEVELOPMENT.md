@@ -1,6 +1,6 @@
 # Development
 
-See [platform support](PLATFORMS.md) for supported and experimental targets.
+See [platform support](PLATFORMS.md) for verified targets and remaining differences.
 Development requires Rust 1.88 or newer, Cargo,
 a native C/C++ toolchain and OpenSSL development libraries; see the
 platform-specific dependencies above. The native

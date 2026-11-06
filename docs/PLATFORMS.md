@@ -1,15 +1,15 @@
 # Platform support
 
-Platform support is being expanded. The new targets below are experimental
-until their native CI builds, hash checks and installation checks pass.
+CPU mining and Cargo installation are verified on the native CI targets below.
+OS-specific tuning differences are listed separately.
 
-| Target | Hash backend | Status |
+| Target | Hash backend | Verified runner |
 | --- | --- | --- |
-| Linux x86-64 | Optimized x86-64 JIT | Existing supported target |
-| Linux ARM64 | Upstream ARM64 JIT | Initial port; CI validation pending |
-| macOS Intel | Optimized x86-64 JIT | Initial port; CI validation pending |
-| macOS Apple Silicon | ARM64 JIT with write/execute protection | Initial port; CI validation pending |
-| Windows x64 (MSVC) | Upstream Windows x64 JIT | Initial port; CI validation pending |
+| Linux x86-64 | Optimized x86-64 JIT | Ubuntu 22.04 and 24.04 |
+| Linux ARM64 | Upstream ARM64 JIT | Ubuntu 24.04 ARM64 |
+| macOS Intel | Optimized x86-64 JIT | macOS 15 Intel |
+| macOS Apple Silicon | ARM64 JIT with write/execute protection | macOS 15 ARM64 |
+| Windows x64 (MSVC) | Upstream Windows x64 JIT | Windows Server 2022 |
 
 All targets build RandomX directly through Cargo. No submodule checkout,
 build-time source download, CMake, Make, Ninja or Python is used by the miner
@@ -63,9 +63,13 @@ other platforms use Cargo installation.
 Every new CI target runs Rust checks, known hash vectors, JIT/interpreter
 agreement, full-memory and light-mode mining, and local Cargo installation.
 Full-memory shares are checked against the light interpreter across concurrent
-job updates, developer-fee switches and seed changes.
+job updates, developer-fee switches and seed changes. Worker startup failures
+and panics must stop the other workers and clear shared state.
 The existing Linux x86-64 jobs additionally run the native differential suite,
 local pool/proxy/runtime regressions and fresh Git-install checks.
+
+The initial port passed all six jobs in the
+[native CI run](https://github.com/c0mm4nd/rxminer/actions/runs/42283459720).
 
 Hosted runners validate functional behavior. They do not establish comparable
 mining performance or guarantee privileged huge-page/MSR availability.

@@ -31,7 +31,7 @@ portable interpreter remains the fallback for architectures without a backend.
 
 ## Local changes
 
-- Memory allocation aligns large objects for transparent huge-page hints.
+- Linux memory allocation aligns large objects for transparent huge-page hints.
   Small VM/JIT objects use ordinary page alignment. Explicit 2 MiB allocation
   uses checked writable prefaulting before exposing memory to workers.
 - VM construction reads CPU capabilities without a shared mutable AES probe.
@@ -42,7 +42,7 @@ portable interpreter remains the fallback for architectures without a backend.
   VMs can use the stack red zone; calling paths use a private code table.
   Secure JIT writes code and constants before enabling execution.
 - Program generation fills only the active v1/v2 length. A separate generator
-  normalizes stored register fields for the x86 compiled VM while preserving
+  normalizes stored register fields for the Unix x86 compiled VM while preserving
   the entropy header, AES feedback and raw-generator interface.
 - Unkeyed BLAKE2b with a 256-byte input and 32/64-byte output processes the
   register file directly. Other sizes and keyed inputs retain the streaming
