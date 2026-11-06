@@ -100,14 +100,17 @@ jobs:
           "OPENSSL_LIB_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append
           "OPENSSL_STATIC=0" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$root/bin" | Out-File -FilePath $env:GITHUB_PATH -Append
-      - name: Rust checks and hash vectors
-        run: |
-          cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
-          cargo test --locked
+      - name: Rust lint checks
+        run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
+      - name: Unit tests and hash vectors
+        timeout-minutes: 5
+        run: cargo test --locked -- --nocapture
       - name: JIT and secure JIT consensus
         run: cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
       - name: Full-memory shares and concurrent job switches
-        run: cargo test --locked --release --lib full_dataset_shares_match_light_vm_across_fee_switches -- --ignored --nocapture
+        run: |
+          cargo test --locked --release --lib full_dataset_shares_match_light_vm_across_fee_switches -- --ignored --nocapture
+          cargo test --locked --release --lib worker_failures_stop_all_workers_and_clear_state -- --ignored --nocapture
       - name: Light and full-memory mining
         run: cargo test --locked --release --test portable -- --ignored --nocapture
       - name: Cargo installation

@@ -729,6 +729,9 @@ mod tests {
         let (cores, init) = test_cores();
         let mut invalid = cores.clone();
         invalid.last_mut().unwrap().cpu = 1 << 20;
+        // Automatic workers are unbound on some platforms; explicitly request
+        // the invalid binding so this still injects a worker startup failure.
+        invalid.last_mut().unwrap().pinned = true;
         let control = Control::new(Arc::new(AtomicBool::new(false)));
         let mut engine = Engine::new(
             invalid,

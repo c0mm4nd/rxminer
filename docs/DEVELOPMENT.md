@@ -2,7 +2,8 @@
 
 See [platform support](PLATFORMS.md) for supported and experimental targets.
 Development requires Rust 1.88 or newer, Cargo,
-a C/C++ compiler, `pkg-config`, and OpenSSL development headers. The native
+a native C/C++ toolchain and OpenSSL development libraries; see the
+platform-specific dependencies above. The native
 RandomX implementation is built by Cargo; CMake, Make, Ninja and Python are
 not required for the build or regression suite.
 
@@ -28,7 +29,8 @@ cargo test --locked
 
 ## Full dataset and native checks
 
-Allow at least 4 GiB of free memory. Run these sequentially:
+The complete native differential suite runs on Linux x86-64. Allow at least
+4 GiB of free memory and run these sequentially:
 
 ```bash
 cargo test --locked --release --lib -- --ignored --test-threads=1
@@ -86,6 +88,8 @@ Cross-platform runners additionally execute:
 
 ```bash
 cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored
+cargo test --locked --release --lib full_dataset_shares_match_light_vm_across_fee_switches -- --ignored
+cargo test --locked --release --lib worker_failures_stop_all_workers_and_clear_state -- --ignored
 cargo test --locked --release --test portable -- --ignored
 ```
 

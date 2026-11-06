@@ -334,6 +334,15 @@ mod tests {
         atomic_write(&path, old).unwrap();
         let stop = AtomicBool::new(false);
         thread::scope(|scope| {
+            struct StopReader<'a>(&'a AtomicBool);
+            impl Drop for StopReader<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::Release);
+                }
+            }
+            // Stop the reader even if a filesystem operation fails and the
+            // writer unwinds; otherwise scope teardown would wait forever.
+            let stop_reader = StopReader(&stop);
             let reader = scope.spawn(|| {
                 while !stop.load(Ordering::Acquire) {
                     let bytes = fs::read(&path).unwrap();
@@ -344,7 +353,7 @@ mod tests {
                 atomic_write(&path, new).unwrap();
                 atomic_write(&path, old).unwrap();
             }
-            stop.store(true, Ordering::Release);
+            drop(stop_reader);
             reader.join().unwrap();
         });
         #[cfg(unix)]
