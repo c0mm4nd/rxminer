@@ -13,7 +13,7 @@ include = [
     "/Cargo.toml", "/Cargo.lock", "/build.rs", "/src/*.rs",
     "/README.md", "/LICENSE", "/config.example.json", "/docs/*.md",
     "/CMakeLists.txt", "/cmake/*.cmake", "/bench/*.cpp",
-    "/scripts/*.py", "/scripts/*.sh", "/tests/*.py", "/tests/randomx/**",
+    "/tests/*.rs", "/tests/support/**", "/tests/randomx/**",
     "/src/crypto/randomx/**",
 ]
 
@@ -42,6 +42,9 @@ signal-hook = "0.3"
 url = "2"
 
 [build-dependencies]
+cc = "1.2"
+
+[dev-dependencies]
 cc = "1.2"
 
 [profile.release]

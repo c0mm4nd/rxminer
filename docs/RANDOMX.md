@@ -29,10 +29,10 @@ The library's BSD 3-Clause license is included in source and binary packages.
 ## Validation
 
 `cargo test --locked` checks Rust behavior and known hash vectors.
-`python3 scripts/check_randomx.py` runs the native and differential regressions
-against the library built by Cargo. Full-dataset tests compare worker output
-with a light VM. Local protocol tests use the pool and proxy fixtures in
-`tests/`.
+`cargo test --locked --release --test tooling native_regressions -- --ignored`
+runs the native and differential regressions against the library built by Cargo.
+Full-dataset tests compare worker output with a light VM. Local protocol tests
+use Rust pool and proxy fixtures in `tests/support/`.
 
-See the [README](../README.md#tests) for commands and the
+See the [development guide](DEVELOPMENT.md) for commands and the
 [performance guide](OPTIMIZATION.md) for configuration and measurement.

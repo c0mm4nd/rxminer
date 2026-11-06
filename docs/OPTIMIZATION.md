@@ -77,11 +77,6 @@ page policy consistent when comparing builds. Repeat measurements after
 initialization and warmup, and account for other activity on the machine.
 Requesting huge pages alone does not establish that they were allocated.
 
-For version-to-version measurements, `scripts/bench_compare.py --help`
-describes the local benchmark driver. Store reports under `bench/`, where
-only C++ source files are tracked. Raw reports are excluded from Cargo packages
-because they can contain local paths and environment data.
-
 ## Concurrency and validation
 
 Each worker owns its VM and shares an initialized dataset through `Arc`.
@@ -98,16 +93,6 @@ interleaving. Cancellation may wait for a native hash or initialization chunk;
 blocking DNS and an unregistered TCP connection attempt are not forcibly
 interrupted.
 
-```bash
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo test --release --locked -- --ignored --test-threads=1
-python3 scripts/check_randomx.py
-python3 scripts/check_cargo_install.py --git
-```
-
-Full-dataset tests need at least 4 GiB of free memory. The installation check
-builds fresh local and temporary Git installations with CMake/Make/Ninja
-blocked; it does not publish to a remote repository. Protocol regression
-commands are listed in the [README](../README.md#tests).
+Build, correctness, protocol and installation checks are documented in the
+[development guide](DEVELOPMENT.md). Full-dataset tests need at least 4 GiB of
+free memory. Run expensive tests sequentially.

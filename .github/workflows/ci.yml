@@ -37,17 +37,15 @@ jobs:
           rustup toolchain install '${{ matrix.rust }}' --profile minimal --component rustfmt --component clippy
           rustup default '${{ matrix.rust }}'
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
       - run: cargo test --locked
       - name: Full dataset and JIT consensus
-        run: cargo test --locked --release -- --ignored --test-threads=1
+        run: cargo test --locked --release --lib -- --ignored --test-threads=1
       - name: Native correctness
-        run: python3 scripts/check_randomx.py
+        run: cargo test --locked --release --test tooling native_regressions -- --ignored --nocapture
       - name: Local protocol and runtime regression
         run: |
-          cargo build --locked --release --features test-dev-fee
-          python3 tests/runtime.py --binary target/release/rxminer
-          python3 tests/integration.py --binary target/release/rxminer
-      - name: Package and install without CMake, Make or Ninja
+          cargo test --locked --release --features test-dev-fee --test network -- --ignored --test-threads=1 --nocapture
+      - name: Package and install without Python, CMake, Make or Ninja
         if: matrix.rust == 'stable'
-        run: python3 scripts/check_cargo_install.py --git --jobs 2
+        run: cargo test --locked --release --test tooling cargo_install_without_external_build_tools -- --ignored --nocapture

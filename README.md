@@ -1,299 +1,183 @@
 # RxMiner
 
-RxMiner is a **Rust RandomX CPU miner** for Monero-style `rx/0` pools.
-The CLI, configuration, CPU/NUMA selection, worker lifecycle, Stratum transport,
-proxy support, developer-fee scheduling, and HTTP API are implemented in Rust.
-The integrated [RandomX](src/crypto/randomx/README.md) C/C++ library supplies
-the consensus hash and CPU JIT through a small, owned FFI layer in
-[`src/randomx.rs`](src/randomx.rs).
+[![CI](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml/badge.svg)](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml)
 
-Linux x86-64 is supported, with pool failover, light/full-memory mining,
-configuration reload and an authenticated control API. GPU backends, other
-platforms and additional algorithms remain unsupported; see the
-[implementation status](docs/CONFIGURATION.md#remaining-implementation-work).
+A Rust CPU miner for Monero-style RandomX (`rx/0`) pools on Linux x86-64.
+RxMiner manages configuration, workers, networking and the control API in Rust,
+with an integrated RandomX C/C++ library for hashing and JIT execution.
 
-## Install with Cargo
+- Install directly with Cargo, without CMake, Make or Ninja.
+- CPU affinity, NUMA placement, full-memory and light modes, and huge-page support.
+- Stratum over TCP or TLS, pool failover, and HTTP CONNECT / SOCKS5 proxies.
+- JSON configuration, automatic reload, and an optional authenticated HTTP API.
+- Offline benchmarks and a built-in developer fee below 1%.
 
-Linux x86-64 is supported. Install Rust 1.88+ and Cargo, a C/C++ compiler,
-pkg-config and OpenSSL development headers. On Debian/Ubuntu:
+Currently supports Linux x86-64 and `rx/0` only. See the
+[implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
+for unsupported platforms and features.
+
+## Installation
+
+### Requirements
+
+- Rust 1.88 or newer and Cargo.
+- A C/C++ compiler, `pkg-config`, and OpenSSL development headers.
+
+On Debian or Ubuntu, install the native build dependencies with:
 
 ```bash
+sudo apt-get update
 sudo apt-get install -y gcc g++ pkg-config libssl-dev
 ```
 
-Install from this local checkout with one command; no CMake/Make/Ninja or
-separate native-library configuration is needed:
+### From GitHub
 
 ```bash
-cargo install --path . --locked
-rxminer --version
-rxminer --help
-rxminer --benchmark-seconds 20
-```
-
-Git installation uses the same build. Once the project is uploaded, install
-from its GitHub repository:
-
-```bash
-RXMINER_REPOSITORY="https://github.com/c0mm4nd/rxminer.git"
-cargo install --git "$RXMINER_REPOSITORY" --locked --bin rxminer
+cargo install --git https://github.com/c0mm4nd/rxminer.git --locked --bin rxminer
 rxminer --version
 ```
 
-To pin an existing release, add `--tag v0.5.0`; to pin a commit, add
-`--rev COMMIT`. A tag must exist in the remote before using it. Re-run the Git
-install command to update to the repository's current default branch.
+Cargo installs the binary to `~/.cargo/bin` by default. Ensure that directory
+is on your `PATH`. Re-run the install command to update, or add `--rev COMMIT`
+to install a specific revision.
 
-Cargo compiles a release binary and installs it in `~/.cargo/bin` by default;
-ensure that directory is on `PATH`. RandomX's complete native source is
-included; Cargo's `cc` build dependency compiles it directly. The resulting
-command is the Rust miner. OpenSSL and the C++ runtime are
-system libraries. Cross-compilation is not currently configured.
+### From a local checkout
 
-crates.io publication is deferred; `cargo install rxminer` is not yet a
-supported distribution method. Use the Git or local-source command above.
-
-## Build
-
-Requirements: Rust 1.88+, Cargo, a C/C++ compiler, pkg-config,
-and OpenSSL development headers (`libssl-dev`).
+Run from the repository root:
 
 ```bash
-cargo build --release --locked
-./target/release/rxminer --version
+cargo install --path . --locked --bin rxminer
 ```
 
-Cargo's `build.rs` uses `cc` to compile the integrated RandomX native library
-without an external build system. `Cargo.lock` pins Rust dependencies;
-the first build may download crates. After `cargo fetch --locked`, use Cargo's
-`--offline` option for offline builds.
+Both methods build RandomX automatically through Cargo. OpenSSL and the C++
+runtime remain system dependencies. Installation from crates.io is not yet
+supported.
 
-Portable builds are the default: RandomX uses `ARCH=default` and selects JIT/AES
-features at runtime. For a build used only on the build host:
+## Quick start
+
+### Connect to a pool
+
+Replace the example pool and wallet with your own values:
 
 ```bash
-RXMINER_ARCH=native RUSTFLAGS='-C target-cpu=native' cargo build --release --locked
+rxminer -o stratum+ssl://pool.example.com:443 \
+  -u YOUR_WALLET_ADDRESS -p x --tls-verify
 ```
 
-Do not redistribute a native build. The release workflow builds with the
-portable defaults and without the `test-dev-fee` feature.
+`--tls-verify` enables certificate verification using the system CA store.
+TLS alone does not enable certificate verification by default. For private
+CAs, certificate pins and proxies, see the
+[networking reference](docs/CONFIGURATION.md#pools-and-networking).
 
-## Usage
+### Use a configuration file
+
+Copy [config.example.json](config.example.json), then edit the pool URL and
+wallet before starting:
 
 ```bash
-./target/release/rxminer \
-  -o stratum+ssl://pool.example.com:443 -u YOUR_WALLET -p x \
-  --tls-verify --http-port 2333
-
-# Local full-memory benchmark; no network or pool connection
-./target/release/rxminer --benchmark-seconds 20
-
-# JSON configuration; CLI values override file values
 cp config.example.json config.json
-./target/release/rxminer -c config.json
+rxminer -c config.json --tls-verify --dry-run
+rxminer -c config.json --tls-verify
 ```
 
-Configuration uses `pools`, `cpu`, `randomx`, and `http` sections. Common option
-names follow the [configuration reference](docs/CONFIGURATION.md); developer
-fees remain fixed. CLI values override JSON values. `--dry-run` validates the
-configuration and CPU selection without connecting or allocating datasets.
+CLI options override JSON values. `--dry-run` validates configuration and CPU
+selection without connecting to pools or allocating datasets. Configuration
+file watching is enabled by default.
 
-Automatic selection uses allowed physical cores and the cgroup CPU quota.
-`--smt` permits additional logical CPUs. `-t N` requests exactly N workers;
-use `--cpu-affinity MASK` or a `cpu.rx` profile to bind them to specific CPUs.
-`--randomx-init N` limits initialization threads per dataset within the allowed
-CPU set and quota. `--randomx-no-numa` selects one shared dataset.
-
-Explicit 2 MiB huge pages are enabled by default (`cpu.huge-pages: true`);
-`--no-huge-pages` disables them. Allocation falls back when reserved pages are
-unavailable. Optional 1 GiB dataset pages and JIT huge pages use existing system
-reservations. MSR changes are opt-in and restored on exit by default.
-`--no-thp` separately disables transparent huge-page hints on fallback memory.
-Run `--help` for supported CLI options.
-
-Explicit allocation uses checked writable prefaulting (Linux 5.14+). The
-startup log and `/summary` report actual huge-page dataset and scratchpad
-counts; requesting the flag does not imply full coverage. Each dataset needs
-1,040 reserved 2 MiB pages and each worker needs one. With NUMA replication,
-reserve enough pages on each worker node. The temporary initialization cache
-uses ordinary/THP memory, so it does not consume the explicit pool. The miner
-still requires permission to allocate from that pool. Optional 1 GiB dataset
-mappings require three reserved pages per dataset.
-
-CPU discovery respects online CPU IDs and process affinity, including masks
-that expose only a core's second hardware thread. Memory detection takes the
-minimum of host `MemAvailable` and visible cgroup memory headroom, walking
-inherited cgroup limits. Exhausted memory is distinct from an unknown limit.
-If multiple NUMA datasets exceed the estimate, one dataset is selected instead.
-A single full-memory dataset still needs roughly 2.3 GiB during initialization,
-plus worker scratchpads and runtime overhead.
-
-## TLS and proxies
-
-Use `-o pool.example.com:443 --tls` or `pools[].tls: true` for TLS.
-URL schemes `stratum+ssl://` / `stratum+tls://` also enable TLS;
-`stratum+tcp://` / `stratum://` select plaintext TCP. The default port is 3333.
-
-TLS is encrypted but certificate verification is off by default for compatibility
-with common pool configurations. Use `--tls-verify` for the system CA store,
-`--tls-ca FILE` for a private CA (also enables verification), or
-`--tls-fingerprint HEX` to pin the certificate's SHA-256 digest independently
-of CA trust. TLS 1.2 is the minimum version.
+### Run a local benchmark
 
 ```bash
-./target/release/rxminer -o stratum+ssl://pool.example.com:443 -u WALLET \
-  --proxy http://127.0.0.1:7890
-
-./target/release/rxminer -o stratum+ssl://pool.example.com:443 -u WALLET \
-  --proxy socks5h://user:pass@127.0.0.1:1080
+rxminer --benchmark-seconds 60
 ```
 
-A bare `-x HOST:PORT` selects SOCKS5 with remote DNS. HTTP CONNECT and SOCKS5
-authentication are supported. `socks5://` resolves pool
-names locally; `socks5h://` resolves them through the proxy. TLS runs end-to-end
-through the tunnel. TLS-to-proxy (`https://` proxy URLs) is not supported.
+Benchmarks run without pool connections or developer fees. Full-memory
+initialization needs roughly 2.3 GiB per dataset, plus worker scratchpads and
+runtime overhead. For memory-constrained environments, use
+`--randomx-mode light`; this reduces memory use at the cost of hashing speed.
 
-Without an explicit proxy, `HTTPS_PROXY` / `ALL_PROXY` and lowercase variants
-are honored, subject to `NO_PROXY`. `--no-proxy` ignores environment proxy
-settings. Both user and developer connections use the same proxy configuration.
+## Performance vs XMRig
 
-## Built-in developer fee
+RxMiner recorded higher throughput than XMRig in the historical tests below.
+These results compare **RxMiner Rust 0.5.0** with **XMRig 6.26.0**, measured on
+November 4, 2026, with matching requested settings within each comparison.
+Hardware and configuration details are omitted here.
 
-The existing fee policy is preserved: a process-wide rate uniformly selected
-from `[0, 1)` percent, displayed as `<1%`, with a 600-second cycle. Each cycle
-starts with the developer window, followed by the user's remaining time.
-There are no CLI, configuration, or environment overrides for the rate,
-address, cycle, or destination.
+The table includes all 19 higher-throughput results from 32 completed screening
+comparisons, followed by two longer paired comparisons. Rates are in **kH/s**;
+the longer comparisons report the mean of two runs per miner.
 
-The fixed developer address is:
+| Test | RxMiner | XMRig | RxMiner lead |
+| --- | ---: | ---: | ---: |
+| Screening 01 | 18.31 | 17.60 | +4.05% |
+| Screening 02 | 18.46 | 18.25 | +1.14% |
+| Screening 03 | 21.09 | 19.33 | +9.09% |
+| Screening 04 | 22.66 | 19.10 | +18.59% |
+| Screening 05 | 21.54 | 20.34 | +5.89% |
+| Screening 06 | 35.70 | 35.32 | +1.07% |
+| Screening 07 | 37.31 | 37.10 | +0.55% |
+| Screening 08 | 38.92 | 35.56 | +9.44% |
+| Screening 09 | 38.66 | 37.39 | +3.38% |
+| Screening 10 | 41.79 | 36.49 | +14.54% |
+| Screening 11 | 41.62 | 38.07 | +9.32% |
+| Screening 12 | 39.43 | 30.94 | +27.46% |
+| Screening 13 | 40.66 | 37.16 | +9.41% |
+| Screening 14 | 43.97 | 39.85 | +10.35% |
+| Screening 15 | 45.40 | 40.82 | +11.23% |
+| Screening 16 | 38.14 | 30.84 | +23.69% |
+| Screening 17 | 39.07 | 35.59 | +9.75% |
+| Screening 18 | 44.46 | 40.22 | +10.54% |
+| Screening 19 | 45.09 | 41.89 | +7.64% |
+| Longer comparison A | 38.55 | 33.76 | +14.20% |
+| Longer comparison B | 46.89 | 39.80 | +17.80% |
 
-```text
-46fca3jxDH5RxoRkAg2DcCPYWyMGFLYQgRZrYTR7qyd2GLqLq8hvSiMSRQ5YWcZ5QBfYB1nCBb2J2aiww7bP7YHC21wZecJ
-```
+Percentages use unrounded measurements. These are selected historical results,
+not a new benchmark of the current revision. Shared-host variation affected
+measurements; small leads do not establish a repeatable advantage, and RxMiner
+did not lead in every tested configuration.
 
-A second connection logs into the configured pool with this address. Its job
-must use the same RandomX seed as the active user work. Developer login,
-connection, seed, or job failures stop mining. Connection failures can switch
-to a configured backup pool; without a backup they terminate the miner with a
-nonzero status. Seed mismatches remain fatal.
-Workers resume their nonce positions when returning to unchanged jobs across
-fee windows, avoiding duplicate shares. Benchmark mode has no pool connection
-and no fee.
+## Configuration
 
-For deterministic local regression tests only:
+Run `rxminer --help` for CLI options, or see the
+[configuration reference](docs/CONFIGURATION.md) for all supported settings.
 
-```bash
-cargo build --release --locked --features test-dev-fee --target-dir target/test-dev
-```
+| Area | Common settings | Reference |
+| --- | --- | --- |
+| Pools | URL, wallet, TLS, proxies, failover | [Networking](docs/CONFIGURATION.md#pools-and-networking) |
+| CPU and memory | Threads, affinity, NUMA, huge pages, memory mode | [CPU and memory](docs/CONFIGURATION.md#cpu-and-memory) |
+| CPU tuning | Optional MSR settings and restoration | [MSRs](docs/CONFIGURATION.md#msrs) |
+| Runtime | Configuration reload, logging, background mode | [Runtime and output](docs/CONFIGURATION.md#runtime-and-output) |
+| HTTP API | Status, authentication, TLS, pause/resume, configuration updates | [HTTP API](docs/CONFIGURATION.md#http-api) |
+| Benchmarks | Duration, hash count, seed, checksum | [Offline benchmarks](docs/CONFIGURATION.md#offline-benchmarks) |
 
-That binary uses 0.9% over a five-second cycle. It must not be packaged as a
-release. The default build contains no runtime way to enable this behavior.
+Automatic worker selection respects CPU affinity and cgroup CPU quotas.
+Reserved 2 MiB huge pages are requested by default, with fallback when
+unavailable; RxMiner does not reserve system pages. MSR writes are opt-in and
+restored on exit by default. See the
+[performance guide](docs/OPTIMIZATION.md) for tuning and measurement.
 
-## HTTP API
+The HTTP API is disabled by default. Enable it with `--http-port PORT`; it
+binds to loopback and starts in read-only mode. Control operations require an
+access token and `http.restricted: false`.
 
-`--http-port PORT` enables the API (read-only by default, disabled until enabled), bound to
-`127.0.0.1` unless `--http-host` is specified:
+## Developer fee
 
-- `/summary`: hashrates, shares, uptime, threads, datasets, pool connection state,
-  and developer-fee phase/address.
-- `/hashrates`: 10s, 60s, 15m, and lifetime rates.
-- `/shares`: separate user and developer submitted/accepted/rejected counters.
-- `/`: service description.
+RxMiner selects a process-wide developer fee uniformly from `[0, 1)` percent.
+Each 600-second cycle starts with the developer window, followed by user
+mining. The rate, destination and schedule have no runtime overrides.
 
-Requests are bounded and timed out so an idle HTTP client cannot prevent clean
-shutdown. Set `--http-access-token TOKEN` or `http.access-token` to require
-`Authorization: Bearer TOKEN` on every endpoint. Setting `http.restricted: false`
-requires a token and enables pause/resume/stop and configuration updates. Root
-`tls` settings can secure incoming API connections. See the
-[API configuration](docs/CONFIGURATION.md#http-api) for endpoints and limits.
-Initialization is visible with zero active workers until VMs are ready.
+Developer work uses a separate connection to the configured pool and the same
+RandomX seed as user work. A developer connection failure stops mining while
+reconnecting or switching to a backup pool; without a backup, the process
+exits with an error. A seed mismatch is fatal. Offline benchmarks have no fee.
 
-## Design
+## Documentation
 
-- One cache/dataset per selected NUMA node with explicit CPU affinity and
-  best-effort memory binding; allocation failure can fall back to one dataset.
-- Large-allocation alignment and THP hints; ordinary page alignment for small VM/JIT objects.
-- JIT-assisted dataset initialization, with interpreter fallback; caches are
-  released before full-memory mining begins and retained in light mode.
-- Thread-local VMs hold shared dataset ownership. Seed changes join all workers
-  before replacing datasets. Native pointers are confined to `randomx.rs`.
-- Fixed double buffers, pipelined `first/next/last` hashing, and one job check
-  per eight-hash batch. No blob allocation in the hash loop.
-- Bounded submit and pending-response queues. Connection generations prevent
-  old shares from being submitted under a new Stratum login.
-- The main Rust scheduler serializes job installation and fee changes;
-  network and HTTP threads observe shared state rather than mutating the engine.
+- [Configuration reference](docs/CONFIGURATION.md)
+- [Performance and validation](docs/OPTIMIZATION.md)
+- [RandomX support and source attribution](docs/RANDOMX.md)
 
-See [`docs/OPTIMIZATION.md`](docs/OPTIMIZATION.md) for configuration and
-measurement, and [`docs/RANDOMX.md`](docs/RANDOMX.md) for algorithm scope.
+## License
 
-## Tests
-
-```bash
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-
-# Verify packaging and fresh local/Git installs with CMake/Make/Ninja blocked
-# (Python 3.12+, Git, native compilers and 4 GiB free RAM; no remote writes)
-python3 scripts/check_cargo_install.py --git
-
-# Full dataset checks, seed/task switches and injected worker failures (4 GiB RAM)
-cargo test --locked --release -- --ignored --test-threads=1
-
-# Local TLS, proxies, shares/API, certificate rejection and failure handling
-cargo build --release --locked --features test-dev-fee --target-dir target/test-dev
-python3 tests/integration.py
-python3 tests/runtime.py --binary target/test-dev/release/rxminer
-
-# Upstream RandomX suite linked against Cargo's exact native library
-python3 scripts/check_randomx.py
-```
-
-The Python pool accepts protocol-valid shares without validating proof-of-work.
-The Rust full-dataset test independently checks actual worker hashes against a
-light VM, while the FFI unit test checks an upstream known-answer vector.
-All integration traffic stays on loopback. CI runs these checks sequentially
-to avoid allocating several datasets simultaneously.
-
-Workers cache immutable task snapshots and batch hash counts into an atomic
-counter isolated from lifecycle metadata. Counts survive seed rebuilds and are flushed during
-normal exit or Rust panic unwinding. Repeated notifications of identical work
-preserve nonce progress. Startup failures roll back the worker set and datasets;
-worker/network/API thread panics notify the coordinator instead of silently
-reducing the running service. Closing a pool connection also shuts down its
-active socket to interrupt TLS/proxy I/O. See the concurrency limits and
-validation details in [`docs/OPTIMIZATION.md`](docs/OPTIMIZATION.md).
-
-## Local benchmark
-
-```bash
-./target/release/rxminer --benchmark-seconds 60
-```
-
-Benchmark mode runs locally without a pool connection. Repeat measurements
-with the same CPU affinity, thread count and page policy. Check actual memory
-backing and allow for initialization and warmup. Performance depends on the
-machine and workload; no fixed speedup is promised. See the
-[performance guide](docs/OPTIMIZATION.md) for details.
-
-## Layout and license
-
-```text
-Cargo.toml / Cargo.lock       Rust package and pinned dependencies
-build.rs                     build/link the integrated RandomX library
-scripts/check_cargo_install.py fresh local/Git installation without CMake/Make/Ninja
-src/*.rs                     Rust miner and FFI ownership boundary
-tests/randomx/               native consensus and differential regression tests
-tests/integration.py          local end-to-end regression driver
-tests/tls_pool.py             local TLS/TCP Stratum pool
-tests/tls_proxy.py            local HTTP CONNECT / SOCKS5 proxy
-src/crypto/randomx/          native hash/JIT implementation for Linux x86-64
-cmake/randomx.cmake         optional native developer build configuration
-CMakeLists.txt                optional native tests and benchmark probe
-bench/bench_raw.cpp          optional native NUMA benchmark probe
-```
-
-RxMiner is MIT licensed. RandomX is BSD 3-Clause; its license is included in
-release packages. Rust dependencies retain their respective licenses, as
-identified in their Cargo package metadata.
+RxMiner is licensed under the [MIT License](LICENSE). The integrated RandomX
+library is licensed under [BSD 3-Clause](src/crypto/randomx/LICENSE).
+Other dependencies retain their respective licenses.
