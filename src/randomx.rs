@@ -18,6 +18,7 @@ const LARGE_PAGES: u32 = 1;
 const HARD_AES: u32 = 2;
 const FULL_MEM: u32 = 4;
 const JIT: u32 = 8;
+const SECURE: u32 = 16;
 const ARGON2: u32 = 96;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,14 +47,8 @@ impl Tuning {
                 matches!(value, 0 | 32 | 64),
                 "invalid Argon2 implementation"
             );
-            ensure!(
-                value != 32 || std::is_x86_feature_detected!("ssse3"),
-                "SSSE3 is unavailable"
-            );
-            ensure!(
-                value != 64 || std::is_x86_feature_detected!("avx2"),
-                "AVX2 is unavailable"
-            );
+            ensure!(value != 32 || flags() & 32 != 0, "SSSE3 is unavailable");
+            ensure!(value != 64 || flags() & 64 != 0, "AVX2 is unavailable");
         }
         Ok(())
     }
@@ -146,7 +141,7 @@ impl Cache {
     }
     fn with_tuning(seed: &[u8], tuning: Tuning) -> Result<Self> {
         tuning.validate()?;
-        let flags = (flags() & JIT) | tuning.argon2.unwrap_or(flags() & ARGON2);
+        let flags = (flags() & (JIT | SECURE)) | tuning.argon2.unwrap_or(flags() & ARGON2);
         // SAFETY: flags are from RandomX's own capability detection.
         let mut ptr = unsafe { randomx_alloc_cache(flags) };
         if ptr.is_null() && flags & JIT != 0 {
@@ -211,7 +206,9 @@ impl Dataset {
                 Err(error) => return Err(error),
             }
         }
-        topology::pin(cores[0].cpu).context("pin cache initializer")?;
+        if cores[0].pinned {
+            topology::pin(cores[0].cpu).context("pin cache initializer")?;
+        }
         if let Some(node) = node {
             let _ = topology::bind_node(node);
         }
@@ -254,7 +251,9 @@ impl Dataset {
         tuning: Tuning,
     ) -> Result<Self> {
         ensure!(!cores.is_empty(), "dataset initialization requires CPUs");
-        topology::pin(cores[0].cpu).context("pin dataset allocator")?;
+        if cores[0].pinned {
+            topology::pin(cores[0].cpu).context("pin dataset allocator")?;
+        }
         if let Some(node) = node {
             let _ = topology::bind_node(node);
         }
@@ -288,8 +287,9 @@ impl Dataset {
             giga_pages: allocation_flags == 256,
             huge_pages: allocation_flags & LARGE_PAGES != 0,
         };
+        #[allow(clippy::unnecessary_cast)] // C unsigned long is 32-bit on Windows.
         // SAFETY: constant item count of the integrated implementation.
-        let items = unsafe { randomx_dataset_item_count() };
+        let items = unsafe { randomx_dataset_item_count() } as u64;
         thread::scope(|scope| -> Result<()> {
             let mut handles = Vec::new();
             for (index, core) in cores.iter().enumerate() {
@@ -301,7 +301,9 @@ impl Dataset {
                     thread::Builder::new()
                         .name(format!("rx-init-{}", core.cpu))
                         .spawn_scoped(scope, move || -> Result<()> {
-                            topology::pin(core.cpu).context("pin dataset initializer")?;
+                            if core.pinned {
+                                topology::pin(core.cpu).context("pin dataset initializer")?;
+                            }
                             if let Some(node) = node {
                                 let _ = topology::bind_node(node);
                             }
@@ -314,12 +316,14 @@ impl Dataset {
                                 let count = (end - start).min(1 << 16);
                                 // SAFETY: [begin,end) partitions are disjoint and in bounds.
                                 // Both allocations remain alive until the scope joins.
+                                #[allow(clippy::unnecessary_cast)]
+                                // Bounds are below the c_ulong item count.
                                 unsafe {
                                     randomx_init_dataset(
                                         dataset.ptr.expect("full dataset").as_ptr(),
                                         cache.0.as_ptr(),
-                                        start,
-                                        count,
+                                        start as c_ulong,
+                                        count as c_ulong,
                                     );
                                 }
                                 start += count;
@@ -381,7 +385,7 @@ impl Vm {
     }
 
     fn create(dataset: Option<Arc<Dataset>>, cache: Option<Arc<Cache>>) -> Result<Self> {
-        let mut flags = flags() & (JIT | HARD_AES);
+        let mut flags = flags() & (JIT | SECURE | HARD_AES);
         if let Some(data) = &dataset {
             if data.ptr.is_some() {
                 flags |= FULL_MEM;
@@ -503,10 +507,10 @@ mod tests {
             hex::decode("639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f")
                 .unwrap();
         let mut kernels = vec![0];
-        if std::is_x86_feature_detected!("ssse3") {
+        if flags() & 32 != 0 {
             kernels.push(32);
         }
-        if std::is_x86_feature_detected!("avx2") {
+        if flags() & 64 != 0 {
             kernels.push(64);
         }
         for argon2 in kernels {
@@ -585,7 +589,7 @@ mod tests {
     #[test]
     #[ignore = "differential JIT/interpreter hashes; run explicitly before changing native code"]
     fn jit_and_secure_jit_match_interpreter() {
-        assert_ne!(flags() & JIT, 0, "this test requires an x86 JIT");
+        assert_ne!(flags() & JIT, 0, "this test requires a JIT backend");
         for seed in [b"jit differential seed A", b"jit differential seed B"] {
             let cache = Arc::new(Cache::new(seed).unwrap());
             let make_vm = |extra| {

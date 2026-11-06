@@ -229,6 +229,9 @@ extern "C" {
 	}
 
 	randomx_vm *randomx_create_vm(randomx_flags flags, randomx_cache *cache, randomx_dataset *dataset) {
+#ifdef RANDOMX_FORCE_SECURE
+        if (flags & RANDOMX_FLAG_JIT) flags |= RANDOMX_FLAG_SECURE;
+#endif
 		assert(cache != nullptr || (flags & RANDOMX_FLAG_FULL_MEM));
 		assert(cache == nullptr || cache->isInitialized());
 		assert(dataset != nullptr || !(flags & RANDOMX_FLAG_FULL_MEM));

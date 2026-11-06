@@ -20,9 +20,14 @@ regression coverage when applying updates.
 
 Cargo compiles these sources directly through `build.rs`. The source package
 includes the implementation and license. Regression tests live in
-`tests/randomx/`; upstream examples, analysis tools and unused platform backends
-are omitted. The optional native developer build is configured by
+`tests/randomx/`; upstream examples and analysis tools are omitted. Windows x64 and ARM64
+backends are restored from the same pinned upstream commit. The optional native developer build is configured by
 `cmake/randomx.cmake`. Run validation commands from the repository root.
+
+Windows uses the upstream x64 JIT and ABI-specific assembly. Unix x86-64 keeps
+the local optimized JIT. ARM64 uses the upstream JIT with a dedicated executable
+allocator; Apple Silicon requires per-thread write/execute protection. The
+portable interpreter remains the fallback for architectures without a backend.
 
 ## Local changes
 
@@ -51,7 +56,7 @@ state between VMs. Performance should be measured on the target system.
 ## Validation
 
 ```bash
-python3 scripts/check_randomx.py
+cargo test --locked --release --test tooling native_regressions -- --ignored
 ```
 
 The driver links the native archive built by Cargo and runs the upstream

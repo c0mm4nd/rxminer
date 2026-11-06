@@ -24,8 +24,9 @@ by default and should be measured separately. Never distribute a build with
 
 ## Threads and memory
 
-The default worker count uses allowed physical cores and respects the CPU
-quota. Start with that setting, then measure an explicit `-t N` or `--smt` if
+On Linux, the default worker count uses allowed physical cores and respects
+the CPU quota. Other targets currently use OS scheduling and available logical
+processors; see [platform support](PLATFORMS.md). Start with that setting, then measure an explicit `-t N` or `--smt` if
 needed. Explicit `-t N` workers are unbound unless `--cpu-affinity` is supplied;
 JSON `cpu.rx` can specify per-worker CPU IDs. More threads do not always
 increase throughput.

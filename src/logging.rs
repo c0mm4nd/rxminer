@@ -4,13 +4,16 @@ use std::{
     fmt,
     fs::{File, OpenOptions},
     io::{IsTerminal, Write},
-    os::unix::net::UnixDatagram,
     sync::{Mutex, OnceLock},
 };
+
+#[cfg(unix)]
+use std::os::unix::net::UnixDatagram;
 
 #[derive(Default)]
 struct Logger {
     file: Option<File>,
+    #[cfg(unix)]
     syslog: Option<UnixDatagram>,
     colors: bool,
 }
@@ -28,9 +31,16 @@ pub fn configure(options: &Options) -> Result<()> {
                 .with_context(|| format!("open log {}", path.display()))
         })
         .transpose()?;
+    #[cfg(unix)]
     let syslog = if options.syslog {
         let socket = UnixDatagram::unbound()?;
-        socket.connect("/dev/log").context("connect syslog")?;
+        socket
+            .connect(if cfg!(target_os = "macos") {
+                "/var/run/syslog"
+            } else {
+                "/dev/log"
+            })
+            .context("connect syslog")?;
         socket.set_write_timeout(Some(std::time::Duration::from_millis(100)))?;
         Some(socket)
     } else {
@@ -41,6 +51,7 @@ pub fn configure(options: &Options) -> Result<()> {
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Logger {
         file,
+        #[cfg(unix)]
         syslog,
         colors: options.colors,
     };
@@ -62,6 +73,7 @@ pub fn write(arguments: fmt::Arguments<'_>) {
     if let Some(file) = &mut logger.file {
         let _ = writeln!(file, "{message}");
     }
+    #[cfg(unix)]
     if let Some(socket) = &logger.syslog {
         let _ = socket.send(format!("<14>rxminer[{}]: {message}", std::process::id()).as_bytes());
     }

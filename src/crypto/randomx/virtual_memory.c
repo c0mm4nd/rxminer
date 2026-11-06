@@ -53,7 +53,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* RxMiner: guarantee 2 MiB alignment so MADV_HUGEPAGE can back the RandomX
  * dataset, cache and per-thread scratchpad with transparent huge pages even
  * when no privileged hugetlb pool is configured. */
-#define RXM_HUGEPAGE_SIZE (2UL * 1024UL * 1024UL)
+
 #define PAGE_READONLY PROT_READ
 #define PAGE_READWRITE (PROT_READ | PROT_WRITE)
 #define PAGE_EXECUTE_READ (PROT_READ | PROT_EXEC)
@@ -61,33 +61,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
 
 #include "virtual_memory.h"
+#include <stdint.h>
+#include <stdlib.h>
+#define RXM_HUGEPAGE_SIZE (2UL * 1024UL * 1024UL)
+#ifdef _MSC_VER
+typedef volatile LONG rxm_atomic;
+#define RXM_LOAD(p) InterlockedCompareExchange((p), 0, 0)
+#define RXM_STORE(p, v) InterlockedExchange((p), (v))
+#else
 #include <stdatomic.h>
-
-static _Atomic int rxm_thp_policy = -1;
-void rxm_set_thp(int enabled) { atomic_store_explicit(&rxm_thp_policy, enabled != 0, memory_order_relaxed); }
-
-#if defined(USE_PTHREAD_JIT_WP) && defined(MAC_OS_VERSION_11_0) \
-	&& MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_11_0
-static int MacOSchecked, MacOSver;
-/* This function is used implicitly by clang's __builtin_available() checker.
- * When cross-compiling, the library containing this function doesn't exist,
- * and linking will fail because the symbol is unresolved. The function here
- * is a quick and dirty hack to get close enough to identify MacOSX 11.0.
- */
-static int32_t __isOSVersionAtLeast(int32_t major, int32_t minor, int32_t subminor) {
-	if (!MacOSchecked) {
-	    struct utsname ut;
-		int mmaj, mmin;
-		uname(&ut);
-		sscanf(ut.release, "%d.%d", &mmaj, &mmin);
-		// The utsname release version is 9 greater than the canonical OS version
-		mmaj -= 9;
-		MacOSver = (mmaj << 8) | mmin;
-		MacOSchecked = 1;
-	}
-	return MacOSver >= ((major << 8) | minor);
-}
+typedef _Atomic int rxm_atomic;
+#define RXM_LOAD(p) atomic_load_explicit((p), memory_order_relaxed)
+#define RXM_STORE(p, v) atomic_store_explicit((p), (v), memory_order_relaxed)
 #endif
+
+static rxm_atomic rxm_thp_policy = -1;
+void rxm_set_thp(int enabled) { RXM_STORE(&rxm_thp_policy, enabled != 0); }
+
 
 
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -140,24 +130,21 @@ out:
 void* allocMemoryPages(size_t bytes) {
 	void* mem;
 #if defined(_WIN32) || defined(__CYGWIN__)
-	mem = VirtualAlloc(NULL, bytes, MEM_COMMIT, PAGE_READWRITE);
+	mem = VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 #else
 	#if defined(__NetBSD__)
 		#define RESERVED_FLAGS PROT_MPROTECT(PROT_EXEC)
 	#else
 		#define RESERVED_FLAGS 0
 	#endif
-	#ifdef USE_PTHREAD_JIT_WP
-		#define MEXTRA MAP_JIT
-		#define PEXTRA	PROT_EXEC
-	#else
-		#define MEXTRA 0
-		#define PEXTRA	0
-	#endif
 	/* Small VM/JIT objects cannot use THP. Keep the kernel's page alignment
 	 * instead of forcing every object onto the same 2 MiB boundary. */
-	if (bytes < RXM_HUGEPAGE_SIZE) {
-		mem = mmap(NULL, bytes, PAGE_READWRITE | RESERVED_FLAGS | PEXTRA, MAP_ANONYMOUS | MAP_PRIVATE | MEXTRA, -1, 0);
+	if (bytes < RXM_HUGEPAGE_SIZE
+#ifndef __linux__
+        || 1
+#endif
+    ) {
+		mem = mmap(NULL, bytes, PAGE_READWRITE | RESERVED_FLAGS, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 		if (mem == MAP_FAILED)
 			mem = NULL;
 	}
@@ -166,7 +153,7 @@ void* allocMemoryPages(size_t bytes) {
 		 * pointer is 2 MiB aligned, which is required for MADV_HUGEPAGE to
 		 * collapse the whole object into huge pages. */
 		size_t mapBytes = bytes + RXM_HUGEPAGE_SIZE;
-		mem = mmap(NULL, mapBytes, PAGE_READWRITE | RESERVED_FLAGS | PEXTRA, MAP_ANONYMOUS | MAP_PRIVATE | MEXTRA, -1, 0);
+		mem = mmap(NULL, mapBytes, PAGE_READWRITE | RESERVED_FLAGS, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 		if (mem == MAP_FAILED) {
 			mem = NULL;
 		}
@@ -181,8 +168,9 @@ void* allocMemoryPages(size_t bytes) {
 			if (suffixOff < mapBytes)
 				munmap((void *) (raw + suffixOff), mapBytes - suffixOff);
 			mem = (void *) aligned;
+#ifdef __linux__
 			if (keep >= RXM_HUGEPAGE_SIZE) {
-				int policy = atomic_load_explicit(&rxm_thp_policy, memory_order_relaxed);
+				int policy = RXM_LOAD(&rxm_thp_policy);
 				const char *thp = policy < 0 ? getenv("RXM_THP") : (policy ? "1" : "0");
 				if (thp == NULL || thp[0] != '0')
 					madvise(mem, keep, MADV_HUGEPAGE);
@@ -199,14 +187,10 @@ void* allocMemoryPages(size_t bytes) {
 						fprintf(stderr, "rxm: mem=%p align=%d populate=%d collapse=%d errno=%d bytes=%zu\n", mem, ((uintptr_t)mem % RXM_HUGEPAGE_SIZE) == 0, pr, cr, errno, keep);
 				}
 			}
+#endif
 		}
 	}
-#if defined(USE_PTHREAD_JIT_WP) && defined(MAC_OS_VERSION_11_0) \
-	&& MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_11_0
-	if (__builtin_available(macOS 11.0, *)) {
-		pthread_jit_write_protect_np(0);
-	}
-#endif
+
 #endif
 	return mem;
 }
@@ -320,19 +304,29 @@ void freePagedMemory(void* ptr, size_t bytes) {
 
 /* Allocation policies are sampled when an instance is constructed. Existing
  * mappings retain their own length, including across configuration reloads. */
-static _Atomic int rxm_jit_huge_pages = 0;
-static _Atomic int rxm_prefetch_mode = 1;
+static rxm_atomic rxm_jit_huge_pages = 0;
+static rxm_atomic rxm_prefetch_mode = 1;
 void rxm_set_jit_huge_pages(int enabled) {
-    atomic_store_explicit(&rxm_jit_huge_pages, enabled != 0, memory_order_relaxed);
+    RXM_STORE(&rxm_jit_huge_pages, enabled != 0);
 }
 void rxm_set_prefetch_mode(int mode) {
-    atomic_store_explicit(&rxm_prefetch_mode, mode, memory_order_relaxed);
+    RXM_STORE(&rxm_prefetch_mode, mode);
 }
 int rxm_get_prefetch_mode(void) {
-    return atomic_load_explicit(&rxm_prefetch_mode, memory_order_relaxed);
+    return RXM_LOAD(&rxm_prefetch_mode);
 }
 void* allocJitMemory(size_t bytes, size_t* mappedBytes) {
-    if (atomic_load_explicit(&rxm_jit_huge_pages, memory_order_relaxed)) {
+#if defined(__APPLE__)
+    *mappedBytes = bytes;
+    void* mem = mmap(NULL, bytes, PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+    if (mem == MAP_FAILED) return NULL;
+#if defined(__aarch64__)
+    pthread_jit_write_protect_np(0);
+#endif
+    return mem;
+#else
+    if (RXM_LOAD(&rxm_jit_huge_pages)) {
         size_t hugeBytes = alignSize(bytes, RXM_HUGEPAGE_SIZE);
         void* mem = allocLargePagesMemory(hugeBytes);
         if (mem) {
@@ -342,8 +336,10 @@ void* allocJitMemory(size_t bytes, size_t* mappedBytes) {
     }
     *mappedBytes = bytes;
     return allocMemoryPages(bytes);
+#endif
 }
 void* allocGigaPagesMemory(size_t bytes) {
+#ifdef __linux__
     const size_t page = 1UL << 30;
     size_t mappedBytes = alignSize(bytes, page);
     void* mem = mmap(NULL, mappedBytes, PROT_READ | PROT_WRITE,
@@ -356,4 +352,8 @@ void* allocGigaPagesMemory(size_t bytes) {
         return NULL;
     }
     return mem;
+#else
+    (void)bytes;
+    return NULL;
+#endif
 }

@@ -1,6 +1,7 @@
 //! Linux MSR changes with rollback on partial failure and restoration on exit.
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::Value;
+#[cfg(target_os = "linux")]
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
@@ -48,6 +49,7 @@ fn entry(value: &str) -> Result<Entry> {
         mask,
     })
 }
+#[cfg(target_arch = "x86_64")]
 fn cpu() -> ([u8; 12], u32, u32) {
     // SAFETY: CPUID leaves 0 and 1 exist on all supported x86-64 CPUs.
     #[allow(unused_unsafe)] // CPUID was unsafe at our minimum Rust version.
@@ -68,6 +70,10 @@ fn cpu() -> ([u8; 12], u32, u32) {
         },
         ((version.eax >> 4) & 15) | ((version.eax >> 12) & 0xf0),
     )
+}
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu() -> ([u8; 12], u32, u32) {
+    ([0; 12], 0, 0)
 }
 pub fn parse(value: &Value) -> Result<Vec<Entry>> {
     match value {
@@ -132,13 +138,16 @@ pub fn parse(value: &Value) -> Result<Vec<Entry>> {
     }
 }
 trait Access {
+    #[cfg(any(target_os = "linux", test))]
     fn read(&mut self, cpu: usize, register: u32) -> Result<u64>;
     fn write(&mut self, cpu: usize, register: u32, value: u64) -> Result<()>;
 }
+#[cfg(target_os = "linux")]
 struct Device {
     files: BTreeMap<usize, File>,
     _lock: File,
 }
+#[cfg(target_os = "linux")]
 impl Access for Device {
     fn read(&mut self, cpu: usize, register: u32) -> Result<u64> {
         let mut bytes = [0; 8];
@@ -157,6 +166,7 @@ pub struct Guard {
     restore: bool,
 }
 impl Guard {
+    #[cfg(any(target_os = "linux", test))]
     fn apply(
         mut access: Box<dyn Access>,
         cpus: &[usize],
@@ -200,6 +210,7 @@ impl Drop for Guard {
         }
     }
 }
+#[cfg(target_os = "linux")]
 pub fn apply(cpus: &[usize], entries: &[Entry], restore: bool) -> Result<Option<Guard>> {
     if entries.is_empty() {
         return Ok(None);
@@ -237,6 +248,15 @@ pub fn apply(cpus: &[usize], entries: &[Entry], restore: bool) -> Result<Option<
         restore,
     )
     .map(Some)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn apply(_cpus: &[usize], entries: &[Entry], _restore: bool) -> Result<Option<Guard>> {
+    ensure!(
+        entries.is_empty(),
+        "MSR writes require the Linux MSR backend"
+    );
+    Ok(None)
 }
 
 #[cfg(test)]

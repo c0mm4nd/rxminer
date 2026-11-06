@@ -46,11 +46,9 @@ fn main() -> ExitCode {
         }
     }
     let stop = Arc::new(AtomicBool::new(false));
-    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-        if let Err(error) = signal_hook::flag::register(signal, stop.clone()) {
-            rxminer::status!("rxminer: install signal handler: {error}");
-            return ExitCode::FAILURE;
-        }
+    if let Err(error) = runtime::install_signals(stop.clone()) {
+        rxminer::status!("rxminer: install signal handler: {error}");
+        return ExitCode::FAILURE;
     }
     match runtime::run(options, cli, stop) {
         Ok(()) => ExitCode::SUCCESS,

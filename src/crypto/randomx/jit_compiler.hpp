@@ -64,4 +64,19 @@ namespace randomx {
 	};
 }
 
+#if defined(RANDOMX_COMPILER_X86)
+#ifdef _WIN32
+#include "jit_compiler_x86_windows.hpp"
+#else
 #include "jit_compiler_x86.hpp"
+#define RXM_NORMALIZED_X86 1
+#endif
+#elif defined(RANDOMX_COMPILER_A64)
+#include "jit_compiler_a64.hpp"
+#else
+#include "jit_compiler_fallback.hpp"
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+#define RANDOMX_FORCE_SECURE
+#endif

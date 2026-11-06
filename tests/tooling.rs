@@ -1,3 +1,4 @@
+#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 //! Developer checks run explicitly; ordinary `cargo test` does not rebuild packages.
 mod support;
 

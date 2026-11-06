@@ -870,7 +870,7 @@ impl Options {
             .transpose()?;
         let print_time = cli.print_time.unwrap_or(file.print_time);
         ensure!(print_time <= 86400, "print-time must be 0..86400 seconds");
-        Ok(Self {
+        let options = Self {
             source_cli,
             http_restricted: file.http.restricted,
             server_tls: file.tls,
@@ -909,7 +909,54 @@ impl Options {
             seed,
             print_time,
             dry_run: cli.dry_run,
-        })
+        };
+        options.validate_platform()?;
+        Ok(options)
+    }
+
+    fn validate_platform(&self) -> Result<()> {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            ensure!(
+                self.msr.is_empty(),
+                "MSR tuning currently requires Linux x86-64"
+            );
+        }
+        if !cfg!(target_os = "linux") {
+            ensure!(
+                !self.tuning.one_gb_pages,
+                "1 GiB pages currently require Linux"
+            );
+            ensure!(
+                !self.pause_on_battery,
+                "battery monitoring currently requires Linux"
+            );
+        }
+        if !cfg!(all(target_arch = "x86_64", not(windows))) {
+            ensure!(
+                self.prefetch_mode == 1,
+                "custom JIT prefetch modes currently require the Unix x86-64 backend"
+            );
+        }
+        if cfg!(windows) {
+            ensure!(
+                !self.background,
+                "background mode is unavailable on Windows"
+            );
+            ensure!(
+                !self.syslog,
+                "syslog is unavailable on Windows; use log-file"
+            );
+        }
+        if cfg!(target_os = "macos") {
+            ensure!(
+                !self
+                    .profile
+                    .as_ref()
+                    .is_some_and(|p| p.iter().any(Option::is_some)),
+                "macOS does not expose hard CPU affinity; use unbound workers (-1)"
+            );
+        }
+        Ok(())
     }
 
     pub fn select_cores(&self, all: &[Core], quota: Option<usize>) -> Result<Vec<Core>> {
@@ -970,10 +1017,10 @@ mod tests {
     #[test]
     fn canonical_config_and_benchmark() {
         let opts = options(&["rxminer", "--bench", "1M", "--randomx-no-numa", "--no-huge-pages"],
-            r#"{"cpu":{"rx":[0,-1],"huge-pages":2048},"randomx":{"init":2},"http":{"enabled":false,"port":2333}}"#).unwrap();
+            r#"{"cpu":{"rx":[-1,-1],"huge-pages":2048},"randomx":{"init":2},"http":{"enabled":false,"port":2333}}"#).unwrap();
         assert!(opts.pool.is_none());
         assert_eq!(opts.benchmark, Some(Benchmark::Hashes(1_000_000)));
-        assert_eq!(opts.profile, Some(vec![Some(0), None]));
+        assert_eq!(opts.profile, Some(vec![None, None]));
         assert_eq!(opts.init_threads, Some(2));
         assert!(!opts.numa && !opts.huge_pages);
         assert_eq!(opts.http_port, 0);
@@ -1024,6 +1071,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn local_options_and_profile_aliases_are_resolved() {
         let opts = options(
             &["rxminer", "--benchmark=1"],
@@ -1113,6 +1161,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn profiles_preserve_affinity_and_unbound_workers() {
         let all = vec![
             Core {
@@ -1150,6 +1199,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(opts.profile, Some(vec![Some(2), Some(5), None]));
+    }
+    #[test]
+    fn unavailable_platform_options_are_rejected() {
+        if cfg!(target_os = "macos") {
+            assert!(options(&["rxminer", "--benchmark=1"], r#"{"cpu":{"rx":[0]}}"#).is_err());
+            assert!(options(&["rxminer", "--benchmark=1"], r#"{"cpu":{"rx":[-1]}}"#).is_ok());
+        }
+        if cfg!(windows) {
+            for flag in ["--background", "--syslog"] {
+                assert!(options(&["rxminer", "--benchmark=1", flag], "{}").is_err());
+            }
+        }
+        if !cfg!(target_os = "linux") {
+            assert!(options(&["rxminer", "--benchmark=1", "--randomx-1gb-pages"], "{}").is_err());
+        }
     }
     #[test]
     fn benchmark_sizes_and_example_are_valid() {

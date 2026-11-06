@@ -1,3 +1,4 @@
+#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 //! Local fixtures only; enable test-dev-fee and run ignored tests sequentially.
 #![cfg(feature = "test-dev-fee")]
 #[path = "support/network.rs"]

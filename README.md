@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml/badge.svg)](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml)
 
-A Rust CPU miner for Monero-style RandomX (`rx/0`) pools on Linux x86-64.
+A Rust CPU miner for Monero-style RandomX (`rx/0`) pools.
 RxMiner manages configuration, workers, networking and the control API in Rust,
 with an integrated RandomX C/C++ library for hashing and JIT execution.
 
@@ -12,9 +12,10 @@ with an integrated RandomX C/C++ library for hashing and JIT execution.
 - JSON configuration, automatic reload, and an optional authenticated HTTP API.
 - Offline benchmarks and a built-in developer fee below 1%.
 
-Currently supports Linux x86-64 and `rx/0` only. See the
-[implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
-for unsupported platforms and features.
+Linux x86-64 is supported; Windows x64, macOS and Linux ARM64 ports are being
+validated. See [platform support](docs/PLATFORMS.md) for status and dependencies,
+and [implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
+for remaining features.
 
 ## Installation
 
@@ -149,7 +150,7 @@ Run `rxminer --help` for CLI options, or see the
 | HTTP API | Status, authentication, TLS, pause/resume, configuration updates | [HTTP API](docs/CONFIGURATION.md#http-api) |
 | Benchmarks | Duration, hash count, seed, checksum | [Offline benchmarks](docs/CONFIGURATION.md#offline-benchmarks) |
 
-Automatic worker selection respects CPU affinity and cgroup CPU quotas.
+On Linux, automatic worker selection respects CPU affinity and cgroup CPU quotas.
 Reserved 2 MiB huge pages are requested by default, with fallback when
 unavailable; RxMiner does not reserve system pages. MSR writes are opt-in and
 restored on exit by default. See the
@@ -172,6 +173,7 @@ exits with an error. A seed mismatch is fatal. Offline benchmarks have no fee.
 
 ## Documentation
 
+- [Platform support and dependencies](docs/PLATFORMS.md)
 - [Configuration reference](docs/CONFIGURATION.md)
 - [Performance and validation](docs/OPTIMIZATION.md)
 - [RandomX support and source attribution](docs/RANDOMX.md)

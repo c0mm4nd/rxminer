@@ -49,3 +49,63 @@ jobs:
       - name: Package and install without Python, CMake, Make or Ninja
         if: matrix.rust == 'stable'
         run: cargo test --locked --release --test tooling cargo_install_without_external_build_tools -- --ignored --nocapture
+  platforms:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            exe: ''
+          - name: macOS Intel
+            os: macos-15-intel
+            exe: ''
+          - name: macOS Apple Silicon
+            os: macos-15
+            exe: ''
+          - name: Windows x64 MSVC
+            os: windows-2022
+            exe: '.exe'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 pkg-config
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+      - name: Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          & "$root/vcpkg.exe" install openssl:x64-windows-static-md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKGRS_TRIPLET=x64-windows-static-md" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Rust checks and hash vectors
+        run: |
+          cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
+          cargo test --locked
+      - name: JIT and secure JIT consensus
+        run: cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
+      - name: Light and full-memory mining
+        run: cargo test --locked --release --test portable -- --ignored --nocapture
+      - name: Cargo installation
+        run: |
+          cargo install --path . --locked --root "$RUNNER_TEMP/rxminer-install"
+          "$RUNNER_TEMP/rxminer-install/bin/rxminer${{ matrix.exe }}" --version
+          "$RUNNER_TEMP/rxminer-install/bin/rxminer${{ matrix.exe }}" --benchmark-seconds 1 --randomx-mode light --threads 1 --no-huge-pages

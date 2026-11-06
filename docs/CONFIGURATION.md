@@ -4,7 +4,7 @@ RxMiner uses familiar `pools`, `cpu`, `randomx`, `http`, and logging options.
 CLI values override JSON. Start from [config.example.json](../config.example.json)
 and validate with `rxminer -c config.json --dry-run`. Validation does not connect
 to pools, allocate datasets, or write MSRs. TLS server certificates are checked
-when configured. Linux x86-64 and `rx/0` are currently supported.
+when configured. Mining uses `rx/0`; see [platform support](PLATFORMS.md) for OS-specific capabilities.
 
 Option names follow the [CLI reference](https://xmrig.com/docs/miner/command-line-options)
 and [CPU configuration reference](https://xmrig.com/docs/miner/config/cpu).
@@ -161,7 +161,8 @@ options are removed, with no calls to an external benchmark service.
 
 These features are still unavailable and must not be treated as implemented:
 
-- GPU backends, Windows, ARM, RISC-V, and algorithms other than `rx/0`.
+- GPU backends, RISC-V and Windows ARM64 validation, and algorithms other than `rx/0`.
+- Non-Linux NUMA placement and physical-core discovery; see [platform support](PLATFORMS.md).
 - Daemon RPC mining and self-select/origin submission.
 - Cache QoS, named assembly kernels, and SSE2/XOP/AVX-512 Argon2 kernels.
 - AVX2 dataset initialization (`randomx.init-avx2: 1`); selecting an AVX2 Argon2

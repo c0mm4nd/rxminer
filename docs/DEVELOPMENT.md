@@ -1,6 +1,7 @@
 # Development
 
-RxMiner supports Linux x86-64. Development requires Rust 1.88 or newer, Cargo,
+See [platform support](PLATFORMS.md) for supported and experimental targets.
+Development requires Rust 1.88 or newer, Cargo,
 a C/C++ compiler, `pkg-config`, and OpenSSL development headers. The native
 RandomX implementation is built by Cargo; CMake, Make, Ninja and Python are
 not required for the build or regression suite.
@@ -46,7 +47,7 @@ the separate normalized JIT path. Compiler selection honors `CC` and `CXX`.
 cargo test --locked --release --features test-dev-fee --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
 ```
 
-These tests require `taskset` (from `util-linux`) and at least 4 GiB of free
+These Linux x86-64 tests require `taskset` (from `util-linux`) and at least 4 GiB of free
 memory. They use Rust fixtures bound to loopback, generate temporary TLS
 certificates through the OpenSSL library, and never connect to public pools.
 
@@ -66,7 +67,7 @@ Hash correctness is checked independently by the Rust and native suites.
 cargo test --locked --release --test tooling cargo_install_without_external_build_tools -- --ignored --nocapture
 ```
 
-This check also requires Git and `taskset`. It verifies `cargo package`, fresh
+This Linux x86-64 check also requires Git and `taskset`. It verifies `cargo package`, fresh
 local-source and temporary Git installations, and actual hashing by each
 installed binary. Each build uses a clean target directory, two compilation
 jobs and portable defaults. Python, CMake, Make and Ninja are blocked for
@@ -80,3 +81,14 @@ Rust on Ubuntu 24.04. Both jobs run correctness and protocol checks; the stable
 job additionally verifies packaging and installation. Expensive tests run
 sequentially to limit dataset memory use. Release builds use default features;
 the accelerated developer-fee test binary has a separate target directory.
+
+Cross-platform runners additionally execute:
+
+```bash
+cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored
+cargo test --locked --release --test portable -- --ignored
+```
+
+The portable tests verify CLI behavior and actual light/full-memory hashing.
+The Linux-only native/protocol tools are explicitly gated rather than being
+reported as tested on other platforms.

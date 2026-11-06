@@ -27,14 +27,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "cpu.hpp"
+#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_MSC_VER)
+#include <intrin.h>
+static void cpuid(int info[4], int leaf) { __cpuidex(info, leaf, 0); }
+#else
 #include <cpuid.h>
-
-static void cpuid(int info[4], int leaf) {
-	__cpuid_count(leaf, 0, info[0], info[1], info[2], info[3]);
-}
+static void cpuid(int info[4], int leaf) { __cpuid_count(leaf, 0, info[0], info[1], info[2], info[3]); }
+#endif
+#elif defined(__aarch64__) && defined(__linux__)
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
 
 namespace randomx {
 	Cpu::Cpu() {
+#if defined(_M_X64) || defined(__x86_64__)
 		int info[4];
 		cpuid(info, 0);
 		int nIds = info[0];
@@ -47,6 +55,11 @@ namespace randomx {
 			cpuid(info, 0x00000007);
 			avx2_ = (info[1] & (1 << 5)) != 0;
 		}
+#elif defined(__aarch64__) && defined(__linux__)
+        aes_ = (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
+#elif defined(__aarch64__) && defined(__APPLE__)
+        aes_ = true;
+#endif
 	}
 
 	const Cpu cpu;

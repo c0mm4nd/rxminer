@@ -1,8 +1,7 @@
 # RandomX support
 
 RxMiner is a Rust CPU miner for `rx/0` pools. Its owned FFI layer uses the
-integrated RandomX C/C++ library for hashing and JIT execution. Linux x86-64 is
-the supported platform.
+integrated RandomX C/C++ library for hashing and JIT execution. See [platform support](PLATFORMS.md) for the native backends and validation status.
 
 ## Supported behavior
 

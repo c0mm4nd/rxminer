@@ -122,13 +122,22 @@ namespace randomx {
 	class SuperscalarProgram;
 	using SuperscalarProgramList = std::array<SuperscalarProgram, RANDOMX_CACHE_ACCESSES>;
 
-#if !defined(__linux__) || !defined(__x86_64__)
-#error "RxMiner RandomX supports Linux x86-64"
-#endif
+#if defined(_M_X64) || defined(__x86_64__)
 	#define RANDOMX_HAVE_COMPILER 1
 	#define RANDOMX_COMPILER_X86
+
 	class JitCompilerX86;
 	using JitCompiler = JitCompilerX86;
+#elif defined(__aarch64__)
+	#define RANDOMX_HAVE_COMPILER 1
+	#define RANDOMX_COMPILER_A64
+	class JitCompilerA64;
+	using JitCompiler = JitCompilerA64;
+#else
+	#define RANDOMX_HAVE_COMPILER 0
+	class JitCompilerFallback;
+	using JitCompiler = JitCompilerFallback;
+#endif
 
 	using addr_t = uint32_t;
 

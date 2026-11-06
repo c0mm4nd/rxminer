@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -16,7 +15,41 @@ use std::{
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
+pub fn install_signals(stop: Arc<AtomicBool>) -> Result<()> {
+    #[cfg(unix)]
+    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        signal_hook::flag::register(signal, stop.clone())?;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{
+            SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT,
+        };
+        static STOP: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+        unsafe extern "system" fn handle(event: u32) -> windows_sys::core::BOOL {
+            if matches!(event, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+                if let Some(stop) = STOP.get() {
+                    stop.store(true, Ordering::Release);
+                }
+                return 1;
+            }
+            0
+        }
+        STOP.set(stop)
+            .map_err(|_| anyhow::anyhow!("console handler already installed"))?;
+        // SAFETY: handler and STOP live for the process lifetime; the handler only stores an atomic flag.
+        if unsafe { SetConsoleCtrlHandler(Some(handle), 1) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
 // Called by main before signal registration or creation of any worker thread.
+#[cfg(unix)]
 pub fn background() -> Result<bool> {
     // SAFETY: main calls this while single-threaded; both branches resume ordinary Rust execution.
     let pid = unsafe { libc::fork() };
@@ -44,6 +77,11 @@ pub fn background() -> Result<bool> {
     Ok(false)
 }
 
+#[cfg(not(unix))]
+pub fn background() -> Result<bool> {
+    anyhow::bail!("background mode is not implemented on this platform")
+}
+
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -53,20 +91,47 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&temporary, &path)?;
+        drop(file);
+        replace_file(&temporary, &path)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(not(windows))]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to)
+}
+#[cfg(windows)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: both paths are valid nul-terminated UTF-16 arrays for the duration of the call.
+    if unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn autosave(options: &Options, cli: &Cli) -> Result<()> {
@@ -282,11 +347,14 @@ mod tests {
             stop.store(true, Ordering::Release);
             reader.join().unwrap();
         });
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         fs::remove_file(path).unwrap();
         assert!(!is_pool_failure(&anyhow::anyhow!("create RandomX VM")));
         assert!(is_pool_failure(&anyhow::anyhow!(
