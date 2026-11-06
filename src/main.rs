@@ -1,0 +1,62 @@
+use clap::Parser;
+use rxminer::{
+    config::{Cli, Options},
+    runtime,
+};
+use std::{
+    process::ExitCode,
+    sync::{atomic::AtomicBool, Arc},
+};
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let options = match Options::from_cli(cli.clone()) {
+        Ok(options) => options,
+        Err(error) => {
+            rxminer::status!("rxminer: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+    if options.dry_run {
+        let validation = rxminer::topology::discover()
+            .and_then(|all| options.select_cores(&all, rxminer::topology::cpu_quota()));
+        return match validation {
+            Ok(cores) => {
+                println!("configuration OK ({} worker threads)", cores.len());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                rxminer::status!("rxminer: {error:#}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    if let Err(error) = rxminer::logging::configure(&options) {
+        rxminer::status!("rxminer: {error:#}");
+        return ExitCode::FAILURE;
+    }
+    if options.background {
+        match runtime::background() {
+            Ok(true) => return ExitCode::SUCCESS,
+            Ok(false) => (),
+            Err(error) => {
+                rxminer::status!("rxminer: {error:#}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        if let Err(error) = signal_hook::flag::register(signal, stop.clone()) {
+            rxminer::status!("rxminer: install signal handler: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    match runtime::run(options, cli, stop) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            rxminer::status!("rxminer: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}

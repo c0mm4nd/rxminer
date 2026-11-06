@@ -1,0 +1,72 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev python3
+
+      - name: Rust checks and portable release build
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          cargo build --release --locked
+          cargo test --locked --release -- --ignored --test-threads=1
+
+      - name: RandomX tests
+        run: python3 scripts/check_randomx.py
+
+      - name: Local protocol regression tests
+        run: |
+          cargo build --release --locked --features test-dev-fee --target-dir target/test-dev
+          python3 tests/integration.py
+
+      - name: Smoke test
+        run: |
+          ./target/release/rxminer --version
+          ldd ./target/release/rxminer
+
+      - name: Cargo installation without CMake or Make
+        run: python3 scripts/check_cargo_install.py --jobs 2 --git
+
+      - name: Package
+        run: |
+          name="rxminer-${GITHUB_REF_NAME:-dev}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/rxminer README.md LICENSE Cargo.lock config.example.json "dist/$name/"
+          cp src/crypto/randomx/LICENSE "dist/$name/LICENSE-RandomX"
+          cp -r docs "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rxminer-linux-x86_64
+          path: dist/*
+
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

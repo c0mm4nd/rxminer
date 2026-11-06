@@ -1,0 +1,53 @@
+name: Rust and native regression
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rust: '1.88.0'
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-24.04
+            rust: stable
+            cc: clang
+            cxx: clang++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config clang
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install '${{ matrix.rust }}' --profile minimal --component rustfmt --component clippy
+          rustup default '${{ matrix.rust }}'
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Full dataset and JIT consensus
+        run: cargo test --locked --release -- --ignored --test-threads=1
+      - name: Native correctness
+        run: python3 scripts/check_randomx.py
+      - name: Local protocol and runtime regression
+        run: |
+          cargo build --locked --release --features test-dev-fee
+          python3 tests/runtime.py --binary target/release/rxminer
+          python3 tests/integration.py --binary target/release/rxminer
+      - name: Package and install without CMake, Make or Ninja
+        if: matrix.rust == 'stable'
+        run: python3 scripts/check_cargo_install.py --git --jobs 2

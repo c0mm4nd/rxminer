@@ -1,0 +1,54 @@
+[package]
+name = "rxminer"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "RandomX CPU miner with NUMA placement and TLS Stratum"
+build = "build.rs"
+readme = "README.md"
+keywords = ["randomx", "monero", "mining", "stratum", "numa"]
+categories = ["command-line-utilities"]
+include = [
+    "/Cargo.toml", "/Cargo.lock", "/build.rs", "/src/*.rs",
+    "/README.md", "/LICENSE", "/config.example.json", "/docs/*.md",
+    "/CMakeLists.txt", "/cmake/*.cmake", "/bench/*.cpp",
+    "/scripts/*.py", "/scripts/*.sh", "/tests/*.py", "/tests/randomx/**",
+    "/src/crypto/randomx/**",
+]
+
+[[bin]]
+name = "rxminer"
+path = "src/main.rs"
+
+[features]
+default = []
+# Local regression builds only; never enable for release artifacts.
+test-dev-fee = []
+vaes = []
+
+[dependencies]
+anyhow = "1"
+arc-swap = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+libc = "0.2"
+openssl = "0.10"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+signal-hook = "0.3"
+url = "2"
+
+[build-dependencies]
+cc = "1.2"
+
+[profile.release]
+opt-level = 3
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.16)
+project(rxminer_native LANGUAGES C CXX)
+
+# The miner is built and installed by Cargo. CMake is only for the integrated
+# RandomX correctness suite and the optional native benchmark probe.
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+include(cmake/randomx.cmake)
+add_executable(randomx-tests EXCLUDE_FROM_ALL tests/randomx/tests.cpp)
+target_link_libraries(randomx-tests PRIVATE randomx)
+target_compile_definitions(randomx-tests PRIVATE HAVE_POSIX_MEMALIGN)
+target_compile_options(randomx-tests PRIVATE -maes)
+add_executable(rxbench EXCLUDE_FROM_ALL bench/bench_raw.cpp)
+target_link_libraries(rxbench PRIVATE randomx pthread)
