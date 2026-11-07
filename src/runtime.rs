@@ -294,8 +294,8 @@ fn reload_options(cli: &Cli, bytes: &[u8], background: bool) -> Result<Options> 
 fn is_pool_failure(error: &anyhow::Error) -> bool {
     let message = error.to_string();
     message.starts_with("user pool retries exhausted")
-        || message.starts_with("developer connection unavailable")
-        || message == "developer connection dropped"
+        || message.starts_with("required pool connection unavailable")
+        || message == "required pool connection dropped"
 }
 
 #[cfg(test)]

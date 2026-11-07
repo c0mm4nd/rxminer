@@ -19,6 +19,36 @@ struct Logger {
 }
 static LOGGER: OnceLock<Mutex<Logger>> = OnceLock::new();
 
+fn color(message: &str) -> &'static str {
+    if message.starts_with("RxMiner ") {
+        "1;97" // Title.
+    } else if message.starts_with("rxminer:")
+        || message.starts_with("[net] user connection:")
+        || (message.starts_with("[net] pool ") && message.contains(" failed:"))
+    {
+        "1;31" // Errors.
+    } else if message.contains("unavailable")
+        || message.contains("initialization failed")
+        || message.starts_with("[config] reload rejected:")
+        || message.starts_with("[rx] memory budget")
+    {
+        "33" // Warnings and fallbacks.
+    } else if message.starts_with("[speed] ")
+        || message.starts_with("benchmark finished:")
+        || message == "benchmark checksum verified"
+        || message == "[net] user login accepted"
+        || (message.starts_with("[rx] ") && message.contains(" ready ("))
+    {
+        "32" // Progress and success.
+    } else if message.starts_with("[net]") || message.starts_with("[http]") {
+        "94" // Network activity.
+    } else if message.starts_with("[health]") || message.starts_with("dev fee:") {
+        "90" // Secondary information.
+    } else {
+        "36" // Configuration and initialization.
+    }
+}
+
 pub fn configure(options: &Options) -> Result<()> {
     let file = options
         .log_file
@@ -66,7 +96,7 @@ pub fn write(arguments: fmt::Arguments<'_>) {
         .unwrap_or_else(|p| p.into_inner());
     let mut stderr = std::io::stderr().lock();
     if logger.colors && std::io::stderr().is_terminal() {
-        let _ = writeln!(stderr, "\x1b[36m{message}\x1b[0m");
+        let _ = writeln!(stderr, "\x1b[{}m{message}\x1b[0m", color(&message));
     } else {
         let _ = writeln!(stderr, "{message}");
     }

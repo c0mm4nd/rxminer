@@ -103,21 +103,13 @@ impl Status {
     }
     fn print(&self, final_line: bool) {
         crate::status!(
-            "speed 10s/60s/15m {:.1} {:.1} {:.1} H/s | shares {}/{}/{} dev {}/{} | fee {} [{}]{}",
+            "[speed] 10s/60s/15m {:.1} {:.1} {:.1} H/s | shares {}/{}/{}{}",
             self.rate(10),
             self.rate(60),
             self.rate(900),
             self.user.submitted.load(Ordering::Relaxed),
             self.user.accepted.load(Ordering::Relaxed),
             self.user.rejected.load(Ordering::Relaxed),
-            self.dev.submitted.load(Ordering::Relaxed),
-            self.dev.accepted.load(Ordering::Relaxed),
-            if self.fee { "<1%" } else { "0%" },
-            if self.dev_phase.load(Ordering::Relaxed) {
-                "dev"
-            } else {
-                "user"
-            },
             if final_line { " [final]" } else { "" }
         );
     }
@@ -250,10 +242,7 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
     )?;
     ensure!(!cores.is_empty(), "no usable CPU cores found");
     let numa = topology::use_numa(&cores, options.numa, topology::available_memory());
-    crate::status!(
-        "RxMiner {} / Rust / RandomX / TLS or TCP",
-        env!("CARGO_PKG_VERSION")
-    );
+    crate::status!("RxMiner {} / rx/0", env!("CARGO_PKG_VERSION"));
     crate::status!("CPU: {}", topology::summary(&cores));
     crate::status!(
         "NUMA: {}, THP: {}",
@@ -268,10 +257,29 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
     let mut dev = None;
     let mut fee = None;
     if let Some(pool) = &options.pool {
-        crate::status!("developer fee: <1% (built-in, not configurable) -> {DEV_ADDRESS}");
-        if let Some(proxy) = &pool.proxy {
-            crate::status!("pool proxy: {}", proxy.label());
+        crate::status!("pool: {}", pool.address.url);
+        crate::status!("user: {}", pool.user);
+        if !pool.rig_id.is_empty() {
+            crate::status!("rig-id: {}", pool.rig_id);
         }
+        crate::status!(
+            "connection: {} | proxy: {}",
+            if !pool.address.tls {
+                "TCP"
+            } else if !pool.tls.fingerprint.is_empty() && pool.tls.verify {
+                "TLS (certificate and fingerprint verification)"
+            } else if !pool.tls.fingerprint.is_empty() {
+                "TLS (fingerprint verification)"
+            } else if pool.tls.verify {
+                "TLS (certificate verification)"
+            } else {
+                "TLS (unverified)"
+            },
+            pool.proxy
+                .as_ref()
+                .map_or_else(|| "none (direct)".into(), |proxy| proxy.label())
+        );
+        crate::status!("dev fee: <1%");
         fee = Some(FeeSchedule::new()?);
         user = Some(Client::start(pool.clone(), false, control.clone())?);
         let mut dev_options = pool.clone();
@@ -302,6 +310,26 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         tuning.mode = crate::randomx::MemoryMode::Light;
         crate::status!("[rx] memory budget selects light mode");
     }
+    crate::status!(
+        "RandomX: mode {}, AES {}, huge pages {}",
+        match tuning.mode {
+            crate::randomx::MemoryMode::Auto => "auto",
+            crate::randomx::MemoryMode::Fast => "fast (full memory)",
+            crate::randomx::MemoryMode::Light => "light",
+        },
+        match tuning.hw_aes {
+            Some(true) => "hardware",
+            Some(false) => "software",
+            None => "auto",
+        },
+        if tuning.one_gb_pages {
+            "1 GiB requested"
+        } else if options.huge_pages {
+            "2 MiB requested"
+        } else {
+            "off"
+        }
+    );
     let mut engine = Engine::new(cores, init_cores, numa, control.clone(), submit)
         .with_tuning(tuning, options.priority, options.yield_cpu)
         .with_huge_pages(options.huge_pages)
@@ -393,7 +421,7 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         let dev_job = wait_for_job(&dev_state, &control)?;
         ensure!(
             user_job.seed == dev_job.seed,
-            "developer seed does not match user seed"
+            "pool jobs have inconsistent seeds"
         );
         engine.install(dev_job.clone())?;
         schedule.start(Instant::now());
@@ -408,7 +436,7 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         while !control.stopped() {
             ensure!(
                 dev_state.connected.load(Ordering::Acquire),
-                "developer connection dropped"
+                "required pool connection dropped"
             );
             if options.pause_on_battery && last_power_check.elapsed() >= Duration::from_secs(1) {
                 battery = crate::power::on_battery();
@@ -446,7 +474,10 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
             if let Some(next) = next {
                 if !Arc::ptr_eq(&next, &active) {
                     if phase {
-                        ensure!(next.seed == active.seed, "developer seed mismatch");
+                        ensure!(
+                            next.seed == active.seed,
+                            "pool jobs have inconsistent seeds"
+                        );
                     }
                     engine.install(next.clone())?;
                     active = next;

@@ -136,15 +136,11 @@ impl Client {
                     thread_state.job.store(None);
                     if let Err(error) = result {
                         if !control.stopped() && !thread_stop.stopped() {
-                            crate::status!(
-                                "[net] {} connection: {error:#}",
-                                if dev { "developer" } else { "user" }
-                            );
                             if dev {
-                                control
-                                    .fail(format!("developer connection unavailable: {error:#}"));
+                                control.fail("required pool connection unavailable");
                                 break;
                             }
+                            crate::status!("[net] user connection: {error:#}");
                         }
                     }
                     if !dev
@@ -211,7 +207,12 @@ impl Write for Transport {
     }
 }
 impl Transport {
-    fn connect(options: &PoolOptions, stop: &ConnectionStop, control: &Control) -> Result<Self> {
+    fn connect(
+        options: &PoolOptions,
+        stop: &ConnectionStop,
+        control: &Control,
+        dev: bool,
+    ) -> Result<Self> {
         let tcp = proxy::connect_interruptible(
             &options.address,
             options.proxy.as_ref(),
@@ -221,7 +222,9 @@ impl Transport {
         )?;
         if !options.address.tls {
             tcp.set_read_timeout(Some(Duration::from_millis(100)))?;
-            crate::status!("[net] TCP connected to {}", options.address.authority());
+            if !dev {
+                crate::status!("[net] TCP connected to {}", options.address.authority());
+            }
             return Ok(Self::Tcp(tcp));
         }
         let mut connector = SslConnector::builder(SslMethod::tls_client())?;
@@ -273,11 +276,13 @@ impl Transport {
         stream
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(100)))?;
-        crate::status!(
-            "[net] TLS connected to {} ({})",
-            options.address.authority(),
-            stream.ssl().version_str()
-        );
+        if !dev {
+            crate::status!(
+                "[net] TLS connected to {} ({})",
+                options.address.authority(),
+                stream.ssl().version_str()
+            );
+        }
         Ok(Self::Tls(stream))
     }
 
@@ -298,7 +303,7 @@ fn session_loop(
     control: &Control,
 ) -> Result<()> {
     state.nicehash.store(options.nicehash, Ordering::Relaxed);
-    let mut transport = Transport::connect(options, stop, control)?;
+    let mut transport = Transport::connect(options, stop, control, dev)?;
     transport.send(json!({"id":1,"jsonrpc":"2.0","method":"login","params":{
         "login":options.user, "pass":options.pass, "rigid":options.rig_id,
         "agent":options.user_agent, "algo":["rx/0"]}}))?;
@@ -402,7 +407,9 @@ fn handle_message(
             ensure!(login_id.is_some(), "job notification before login");
             let mut job = Job::parse(message["params"].clone(), dev, session)?;
             job.nicehash = nicehash || state.nicehash.load(Ordering::Relaxed);
-            crate::status!("[net] new job {} height {}", job.id, job.height);
+            if !dev {
+                crate::status!("[net] new job {} height {}", job.id, job.height);
+            }
             state.job.store(Some(Arc::new(job)));
         }
         return Ok(());
@@ -428,10 +435,9 @@ fn handle_message(
         *login_id = Some(id.into());
         state.job.store(Some(Arc::new(job)));
         state.connected.store(true, Ordering::Release);
-        crate::status!(
-            "[net] {} login accepted",
-            if dev { "developer" } else { "user" }
-        );
+        if !dev {
+            crate::status!("[net] user login accepted");
+        }
     } else if pending.remove(&id) {
         if failed {
             state.rejected.fetch_add(1, Ordering::Relaxed);

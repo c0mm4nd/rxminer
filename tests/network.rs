@@ -155,10 +155,13 @@ fn rejected_connections() -> Result<()> {
         let mut miner = Process::spawn(&mut command, temp.0.join(format!("{name}.log")))?;
         assert!(!miner.wait(25)?.success());
         assert!(
-            miner.output().contains("developer connection unavailable"),
+            miner
+                .output()
+                .contains("required pool connection unavailable"),
             "{}",
             miner.output()
         );
+        assert!(!miner.output().contains("developer"), "{}", miner.output());
         println!("PASS {name}");
     }
     Ok(())
