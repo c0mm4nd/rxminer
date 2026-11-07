@@ -19,7 +19,7 @@ pub fn affinity() -> io::Result<Vec<usize>> {
             return Err(io::Error::last_os_error());
         }
         Ok((0..usize::BITS as usize)
-            .filter(|bit| process_mask & (1usize << bit) != 0)
+            .filter(|bit| process_mask & group.Mask & (1usize << bit) != 0)
             .map(|bit| usize::from(group.Group) * 64 + bit)
             .collect())
     }
@@ -30,17 +30,33 @@ pub fn affinity() -> io::Result<Vec<usize>> {
 pub fn discover() -> Result<Vec<Core>> {
     let cpus = affinity()?;
     ensure!(!cpus.is_empty(), "no usable CPUs");
-    // Automatic placement uses the OS scheduler until physical-core/NUMA
-    // discovery is implemented for this platform. Never claim hard affinity.
-    Ok(cpus
-        .into_iter()
-        .map(|cpu| Core {
+    #[cfg(windows)]
+    {
+        windows::discover(&cpus).or_else(|error| {
+            crate::status!("physical CPU discovery unavailable: {error}; using OS scheduling");
+            Ok(unbound(&cpus, cpus.len()))
+        })
+    }
+    #[cfg(target_os = "macos")]
+    let physical = macos::physical_cpus().unwrap_or(cpus.len());
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let physical = cpus.len();
+    #[cfg(not(windows))]
+    Ok(unbound(&cpus, physical))
+}
+
+fn unbound(cpus: &[usize], physical: usize) -> Vec<Core> {
+    // On macOS these are worker slots, not hard-bindable CPU identifiers.
+    // Count physical cores first without pretending to know SMT sibling IDs.
+    cpus.iter()
+        .enumerate()
+        .map(|(index, &cpu)| Core {
             cpu,
             pinned: false,
             node: 0,
-            smt: false,
+            smt: index >= physical,
         })
-        .collect())
+        .collect()
 }
 
 pub fn pin(cpu: usize) -> io::Result<()> {
@@ -151,6 +167,18 @@ pub fn available_memory() -> Option<u64> {
         // SAFETY: correctly sized writable MEMORYSTATUSEX structure.
         (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullAvailPhys)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::available_memory()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     None // Unknown headroom is not zero or total installed memory.
 }
+
+#[cfg(windows)]
+#[path = "topology_windows.rs"]
+mod windows;
+
+#[cfg(target_os = "macos")]
+#[path = "topology_macos.rs"]
+mod macos;

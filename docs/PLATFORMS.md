@@ -35,19 +35,22 @@ a suitable target compiler, assembler, linker and OpenSSL installation;
 
 ## Current differences
 
-Linux retains physical-core discovery, cgroup limits, NUMA placement, MSR
-control and battery monitoring. On other platforms, automatic worker selection
-uses the available logical processors and OS scheduling with a single dataset.
+Linux supports physical-core discovery, cgroup limits, NUMA placement, MSR
+control and battery monitoring. Other platforms currently use a single dataset.
 
-Windows can bind workers within the process's current processor group and
+Windows discovers physical cores within the process's current processor group,
+respects its affinity mask and binds automatic workers to those CPUs. SMT siblings
+are used when requested. It
 supports thread priorities, Ctrl+C/Ctrl+Break shutdown, logging and atomic
 configuration replacement. Multi-group CPU discovery, NUMA placement, MSR
 control, background mode and syslog are not implemented.
 
 macOS uses unbound workers because it does not expose Linux-style hard CPU
 affinity. Explicit CPU IDs and masks are rejected; use `-t N` or `cpu.rx`
-entries of `-1`. Available-memory headroom is currently unknown on macOS;
-use light mode when a full dataset cannot be allocated.
+entries of `-1`. Automatic worker count uses the OS physical-core count, with
+logical processors available through `--smt`. Available-memory headroom is
+estimated from free and inactive pages, allowing auto memory mode to choose a
+light cache under memory pressure. Explicit fast mode retains the requested mode.
 
 MSR tuning requires Linux x86-64. Battery monitoring and 1 GiB pages currently
 require Linux. Nondefault JIT prefetch modes require the Unix x86-64 backend.
@@ -81,10 +84,14 @@ gh workflow run riscv.yml --ref main
 The workflow checks native compilation, a known RandomX hash, pipelined hashing,
 concurrent interpreter/JIT/secure-JIT agreement, shared-cache VM recreation,
 full-dataset/light-mode agreement, CLI configuration, Cargo installation and
-positive offline light-mode hash counts. It uses no pool connection. Relevant
-pushes to `main` and pull requests trigger it automatically; manual dispatch
-remains available. The existing platform matrix stays independent of the RISE
-runner. Performance and instruction-extension coverage require further testing.
+positive offline light-mode hash counts. It also runs the portable native vector
+suite, full-memory share checks across job/seed changes, and worker-failure cleanup.
+It uses no pool connection. Dispatch once after a batch of changes passes the
+regular platform matrix: pushes and pull requests do not enqueue RISE jobs.
+An in-progress run is not cancelled by new commits or dispatches. Independent
+checks continue after a failure, with a final failing result if any check failed;
+step summaries and logs are retained in the run artifacts. Performance and
+instruction-extension coverage require further testing.
 
 ## Validation
 

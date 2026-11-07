@@ -1,29 +1,56 @@
-//! Batched atomic accounting, isolated from lifecycle metadata and flushed on unwind.
+//! Worker-local accounting; readers aggregate isolated slots, including retired workers.
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
-#[repr(align(64))]
+// Also separate slots on Apple Silicon, whose cache lines can be 128 bytes.
+#[repr(align(128))]
+#[derive(Default)]
+struct Slot {
+    total: AtomicU64,
+}
+
+#[derive(Default)]
+struct State {
+    retired: u64,
+    slots: Vec<Arc<Slot>>,
+}
+
 #[derive(Default)]
 pub(crate) struct Counters {
-    total: AtomicU64,
+    state: Mutex<State>,
 }
 impl Counters {
     #[cfg(test)]
     fn new(base: u64) -> Self {
         Self {
-            total: AtomicU64::new(base),
+            state: Mutex::new(State {
+                retired: base,
+                slots: Vec::new(),
+            }),
         }
     }
     pub(crate) fn total(&self) -> u64 {
-        self.total.load(Ordering::Relaxed)
+        let state = self.state.lock().unwrap();
+        state.retired
+            + state
+                .slots
+                .iter()
+                .map(|slot| slot.total.load(Ordering::Relaxed))
+                .sum::<u64>()
     }
     pub(crate) fn writers(self: &Arc<Self>, count: usize) -> Vec<Writer> {
+        let mut state = self.state.lock().unwrap();
         (0..count)
-            .map(|_| Writer {
-                bank: self.clone(),
-                pending: 0,
+            .map(|_| {
+                let slot = Arc::new(Slot::default());
+                state.slots.push(slot.clone());
+                Writer {
+                    bank: self.clone(),
+                    slot,
+                    total: 0,
+                }
             })
             .collect()
     }
@@ -32,22 +59,30 @@ impl Counters {
 // Not Clone: each pending batch is accounted exactly once, including on panic.
 pub(crate) struct Writer {
     bank: Arc<Counters>,
-    pending: u64,
+    slot: Arc<Slot>,
+    total: u64,
 }
 impl Writer {
     pub(crate) fn record(&mut self) {
-        self.pending += 1;
+        self.total += 1;
     }
     pub(crate) fn flush(&mut self) {
-        if self.pending != 0 {
-            self.bank.total.fetch_add(self.pending, Ordering::Relaxed);
-            self.pending = 0;
-        }
+        // Single writer: no read-modify-write or shared cache line on the hot path.
+        self.slot.total.store(self.total, Ordering::Relaxed);
     }
 }
 impl Drop for Writer {
     fn drop(&mut self) {
-        self.flush();
+        // Retire under the same lock used by readers: neither lost counts nor
+        // double counting as a worker exits, including during unwinding.
+        let mut state = self.bank.state.lock().unwrap();
+        let index = state
+            .slots
+            .iter()
+            .position(|slot| Arc::ptr_eq(slot, &self.slot))
+            .expect("writer owns a registered slot");
+        state.slots.swap_remove(index);
+        state.retired += self.total;
     }
 }
 
@@ -90,7 +125,11 @@ mod tests {
         writer.record();
         drop(writer);
         assert_eq!(next.total(), before + 1);
-        assert!((Arc::as_ptr(&bank) as usize).is_multiple_of(64));
+        assert!(bank.state.lock().unwrap().slots.is_empty());
+        let writers = bank.writers(2);
+        for writer in &writers {
+            assert!((Arc::as_ptr(&writer.slot) as usize).is_multiple_of(128));
+        }
     }
 
     #[test]

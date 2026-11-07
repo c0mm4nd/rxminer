@@ -26,8 +26,9 @@ by default and should be measured separately. Never distribute a build with
 ## Threads and memory
 
 On Linux, the default worker count uses allowed physical cores and respects
-the CPU quota. Other targets currently use OS scheduling and available logical
-processors; see [platform support](PLATFORMS.md). Start with that setting, then measure an explicit `-t N` or `--smt` if
+the CPU quota. Windows selects allowed physical cores in the current processor
+group and binds automatic workers. macOS uses the physical-core count with OS
+scheduling; see [platform support](PLATFORMS.md). Start with that setting, then measure an explicit `-t N` or `--smt` if
 needed. Explicit `-t N` workers are unbound unless `--cpu-affinity` is supplied;
 JSON `cpu.rx` can specify per-worker CPU IDs. More threads do not always
 increase throughput.
@@ -50,8 +51,10 @@ mode selection are described in the [configuration reference](CONFIGURATION.md).
 - JIT-assisted dataset initialization and runtime CPU-feature selection.
 - Large-allocation alignment and huge-page hints; small VM/JIT objects use
   ordinary page alignment without unnecessary over-allocation.
-- Pipelined hashing, reusable input buffers, cached task snapshots and batched
-  hash counters.
+- Pipelined hashing, reusable input buffers and cached task snapshots.
+- Batched per-worker hash counters, separated by 128 bytes. Workers publish to
+  their own slots; readers aggregate counts, including retired workers, without
+  a shared atomic increment in the mining loop.
 - Active-length program generation, avoiding unused v2 capacity for v1 work.
 - Direct BLAKE2b processing for fixed-size register files, avoiding input
   buffer copies while preserving the general hashing API.

@@ -70,7 +70,12 @@ fn light_and_full_memory_mining() {
                 .spawn()
                 .unwrap(),
         );
-        let deadline = Instant::now() + Duration::from_secs(180);
+        let deadline = Instant::now()
+            + Duration::from_secs(if cfg!(target_arch = "riscv64") {
+                900
+            } else {
+                180
+            });
         let status = loop {
             if let Some(status) = miner.0.try_wait().unwrap() {
                 break status;

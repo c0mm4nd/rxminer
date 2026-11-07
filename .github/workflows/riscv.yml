@@ -1,26 +1,21 @@
 name: RISC-V native regression
 
-# RISE provides ephemeral native runners for this repository.
+# Queue once per completed batch of changes. RISE capacity is shared and scarce.
 on:
-  push:
-    branches: [main]
-    paths: ['src/**', 'tests/**', 'Cargo.*', 'build.rs', '.github/workflows/riscv.yml']
-  pull_request:
-    paths: ['src/**', 'tests/**', 'Cargo.*', 'build.rs', '.github/workflows/riscv.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: riscv-native-${{ github.ref }}
-  cancel-in-progress: true
+  group: riscv-native
+  cancel-in-progress: false
 
 jobs:
   riscv64:
-    name: Linux RISC-V64 JIT and interpreter
+    name: Linux RISC-V64 complete validation
     runs-on: ubuntu-24.04-riscv
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash
@@ -32,43 +27,91 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Verify native architecture and install dependencies
+      - name: Native dependencies
         run: |
           test "$(uname -m)" = riscv64
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev
+          mkdir -p "$RUNNER_TEMP/riscv-logs"
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y build-essential pkg-config libssl-dev
       - name: Native Rust toolchain
+        id: toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          for attempt in 1 2 3; do
+            if rustup toolchain install stable --profile minimal --component rustfmt --component clippy; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 5
+          done
           rustup override set stable
-          rustc -vV
-          rustc -vV | grep -Eq '^host: riscv64(gc|a23)-unknown-linux-gnu$'
-      - name: Formatting and Rust lint checks
+          rustc -vV > "$RUNNER_TEMP/riscv-logs/toolchain.txt"
+          cat "$RUNNER_TEMP/riscv-logs/toolchain.txt"
+          # Read a completed file: grep -q in a rustc pipe can cause SIGPIPE/141.
+          grep -E '^host: riscv64(gc|a23)-unknown-linux-gnu$' "$RUNNER_TEMP/riscv-logs/toolchain.txt"
+      - name: Build all release test executables once
+        id: build
+        continue-on-error: true
+        timeout-minutes: 45
+        run: cargo test --locked --release --no-run 2>&1 | tee "$RUNNER_TEMP/riscv-logs/build.log"
+      - name: Formatting
+        id: format
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        continue-on-error: true
+        run: cargo fmt --check 2>&1 | tee "$RUNNER_TEMP/riscv-logs/format.log"
+      - name: Rust lint checks
+        id: lint
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        continue-on-error: true
         timeout-minutes: 40
-        run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
-      - name: Known RandomX hash and pipelined hashing
+        run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings 2>&1 | tee "$RUNNER_TEMP/riscv-logs/lint.log"
+      - name: Unit tests, known hashes, shared cache and CLI
+        id: unit
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: cargo test --locked --release --no-fail-fast -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/unit.log"
+      - name: Native vectors, dataset initializer and v1/v2 switching
+        id: native
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: cargo test --locked --release --test native_vectors -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/native.log"
+      - name: JIT, secure JIT, full datasets and worker lifecycle
+        id: consensus
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
         timeout-minutes: 40
-        run: cargo test --locked --release --lib randomx::tests::ffi_pipeline_matches_consensus_vector_and_single_hashes -- --exact --nocapture
-      - name: CLI and configuration
-        timeout-minutes: 15
-        run: cargo test --locked --release --test portable cli_version_and_configuration -- --exact --nocapture
-      - name: Concurrent JIT and secure JIT consensus
+        run: cargo test --locked --release --lib -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/consensus.log"
+      - name: Light and full-memory CLI mining
+        id: mining
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 35
+        run: cargo test --locked --release --test portable -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/mining.log"
+      - name: Cargo installation and offline hashing
+        id: install
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
         timeout-minutes: 20
         run: |
-          cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
-          cargo test --locked --release --lib shared_light_cache_and_native_tuning_preserve_consensus -- --nocapture
-      - name: Full dataset agrees with light-mode hashing
-        timeout-minutes: 20
-        run: cargo test --locked --release --lib full_dataset_prefetch_modes_match_light_hashes -- --ignored --nocapture
-      - name: Cargo installation and offline light-mode hashing
-        timeout-minutes: 20
-        run: |
-          cargo install --path . --locked --root "$RUNNER_TEMP/rxminer-install"
+          cargo install --path . --locked --root "$RUNNER_TEMP/rxminer-install" 2>&1 | tee "$RUNNER_TEMP/riscv-logs/install.log"
           "$RUNNER_TEMP/rxminer-install/bin/rxminer" --version
           timeout --kill-after=10s 10m "$RUNNER_TEMP/rxminer-install/bin/rxminer" \
-            --benchmark-seconds 1 --randomx-mode light --threads 1 \
+            --benchmark-seconds 5 --randomx-mode light --threads 1 \
             --randomx-no-numa --no-huge-pages --no-proxy \
-            2>&1 | tee "$RUNNER_TEMP/rxminer-riscv-smoke.log"
-          grep -Eq 'benchmark finished: [1-9][0-9]* hashes' "$RUNNER_TEMP/rxminer-riscv-smoke.log"
+            2>&1 | tee "$RUNNER_TEMP/riscv-logs/smoke.log"
+          grep -E 'benchmark finished: [1-9][0-9]* hashes' "$RUNNER_TEMP/riscv-logs/smoke.log"
+      - name: Save all validation logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: riscv-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/riscv-logs/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Report every result and fail if any check failed
+        if: ${{ !cancelled() }}
+        env:
+          STEP_RESULTS: ${{ toJSON(steps) }}
+        run: |
+          printf '| Check | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          jq -r 'to_entries[] | "| \(.key) | \(.value.outcome) |"' <<< "$STEP_RESULTS" >> "$GITHUB_STEP_SUMMARY"
+          jq -e 'all(.[]; .outcome == "success")' <<< "$STEP_RESULTS"

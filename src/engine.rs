@@ -472,6 +472,12 @@ mod tests {
         sync::{atomic::AtomicU64, Mutex},
     };
 
+    fn test_timeout(seconds: u64) -> Duration {
+        // Native RV64 baseline runners are slower; retain bounded waits without
+        // weakening share-count, lifecycle or hash-correctness assertions.
+        Duration::from_secs(seconds * if cfg!(target_arch = "riscv64") { 10 } else { 1 })
+    }
+
     fn test_cores() -> (Vec<Core>, Vec<Core>) {
         let all = topology::discover().unwrap();
         let init = topology::select(&all, topology::cpu_quota().unwrap_or(8).min(8), false);
@@ -532,7 +538,7 @@ mod tests {
                 .count()
         };
         let wait = |job: &Job, minimum: usize| {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + test_timeout(10);
             while count(job) < minimum {
                 assert!(!control.stopped(), "{:?}", control.error());
                 assert!(Instant::now() < deadline, "workers did not produce shares");
@@ -653,7 +659,7 @@ mod tests {
             )
             .with_nonce_limit(limit.into());
             engine.install(Arc::new(job.clone())).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(20);
+            let deadline = Instant::now() + test_timeout(20);
             while engine.stats.hashes() < limit.into()
                 && Instant::now() < deadline
                 && !control.stopped()
@@ -688,7 +694,7 @@ mod tests {
             let mut job = Job::benchmark([0; 32]);
             job.target = u64::MAX;
             engine.install(Arc::new(job.clone())).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Instant::now() + test_timeout(15);
             while engine.stats.hashes() < limit && Instant::now() < deadline && !control.stopped() {
                 thread::sleep(Duration::from_millis(10));
             }
@@ -764,7 +770,7 @@ mod tests {
         let mut job = Job::benchmark([0; 32]);
         job.target = u64::MAX;
         engine.install(Arc::new(job)).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + test_timeout(10);
         while !control.stopped() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(1));
         }
