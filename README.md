@@ -49,7 +49,7 @@ RXMINER_ARCH=native RUSTFLAGS='-C target-cpu=native' cargo build --release --loc
 ```bash
 rxminer -o stratum+ssl://pool.example.com:443 -u WALLET -p x --tls-verify
 rxminer -c config.json --dry-run      # validate config and CPU selection only
-rxminer --benchmark-seconds 60        # offline, no pool, no fee
+rxminer --benchmark-seconds 60        # offline, no pool connection
 ```
 
 `--tls` without `--tls-verify` does not verify certificates.
@@ -77,14 +77,6 @@ RxMiner 0.5.0 vs XMRig 6.26.0, 2026-11-04, matched settings, mean of 2 runs:
 | B | 46.89 | 39.80 | +17.80% |
 
 Historical results on shared hosts; measure on your own hardware.
-
-## Developer fee
-
-Uniform random rate in `[0, 1)` %, fixed per process. Each 600 s cycle opens
-with the developer window on a separate connection to the same pool and seed.
-Not configurable. Developer connection loss pauses mining until reconnect or
-failover (fatal without a backup pool); seed mismatch is fatal. None in
-benchmarks.
 
 ## Donation
 

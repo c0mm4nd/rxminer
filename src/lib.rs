@@ -1,6 +1,7 @@
 pub mod config;
 pub mod control;
 mod counters;
+mod developer;
 pub mod engine;
 pub mod http;
 pub mod job;

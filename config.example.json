@@ -11,7 +11,7 @@
       "tls-fingerprint": null,
       "socks5": null,
       "nicehash": false,
-      "keepalive": false
+      "keepalive": null
     }
   ],
   "cpu": {

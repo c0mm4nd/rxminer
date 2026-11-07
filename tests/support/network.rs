@@ -246,7 +246,11 @@ impl Pool {
                         json!({"status": "KEEPALIVED"})
                     }
                     Some("submit") => {
-                        if params["job_id"] != job["job_id"] {
+                        if params["algo"] != "rx/0" {
+                            error =
+                                json!({"code": -1, "message": "missing or incorrect algorithm"});
+                            Value::Null
+                        } else if params["job_id"] != job["job_id"] {
                             error = json!({"code": -1, "message": "stale job"});
                             Value::Null
                         } else {

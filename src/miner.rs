@@ -86,7 +86,8 @@ impl Status {
                 "huge_pages":{"size_kib":2048,"datasets":self.engine.huge_datasets.load(Ordering::Relaxed),"giga_datasets":self.engine.giga_datasets.load(Ordering::Relaxed),"scratchpads":self.engine.huge_workers.load(Ordering::Relaxed)},
                 "dev_fee":{"percent":if self.fee {"<1%"} else {"0%"}, "phase":if self.dev_phase.load(Ordering::Relaxed) {"dev"} else {"user"}, "address":DEV_ADDRESS},
                 "pool":{"url":self.pool_url,"connected":self.user.connected.load(Ordering::Acquire)},
-                "dev_pool":{"url":self.pool_url,"connected":self.dev.connected.load(Ordering::Acquire)}}),
+                "dev_pool":{"url":self.dev.endpoint.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                    "connected":self.dev.connected.load(Ordering::Acquire)}}),
                 _ => return (404, json!({"error":"not found","path":path})),
             },
         )
@@ -281,11 +282,9 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         );
         crate::status!("dev fee: <1%");
         fee = Some(FeeSchedule::new()?);
+        let dev_pools = crate::developer::pools(&options)?;
         user = Some(Client::start(pool.clone(), false, control.clone())?);
-        let mut dev_options = pool.clone();
-        dev_options.user = DEV_ADDRESS.into();
-        dev_options.rig_id.push_str("-dev");
-        dev = Some(Client::start(dev_options, true, control.clone())?);
+        dev = Some(Client::start_developer(dev_pools, control.clone())?);
     }
     let user_state = user.as_ref().map(|c| c.state.clone()).unwrap_or_default();
     let dev_state = dev.as_ref().map(|c| c.state.clone()).unwrap_or_default();
@@ -417,12 +416,16 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         }
     } else {
         let mut schedule = fee.unwrap();
-        let user_job = wait_for_job(&user_state, &control)?;
-        let dev_job = wait_for_job(&dev_state, &control)?;
-        ensure!(
-            user_job.seed == dev_job.seed,
-            "pool jobs have inconsistent seeds"
-        );
+        let mut seed_wait = None;
+        let dev_job = loop {
+            ensure!(!control.stopped(), "pool job unavailable");
+            if let Some((_, dev)) =
+                synchronized_jobs(&user_state, &dev_state, &mut seed_wait, Instant::now())?
+            {
+                break dev;
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
         engine.install(dev_job.clone())?;
         schedule.start(Instant::now());
         status.sample();
@@ -434,19 +437,12 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
         let mut last_power_check = Instant::now();
         let mut battery = options.pause_on_battery && crate::power::on_battery();
         while !control.stopped() {
-            ensure!(
-                dev_state.connected.load(Ordering::Acquire),
-                "required pool connection dropped"
-            );
+            let jobs = synchronized_jobs(&user_state, &dev_state, &mut seed_wait, Instant::now())?;
             if options.pause_on_battery && last_power_check.elapsed() >= Duration::from_secs(1) {
                 battery = crate::power::on_battery();
                 last_power_check = Instant::now();
             }
-            if battery
-                || control.paused.load(Ordering::Acquire)
-                || user_state.job.load().is_none()
-                || !user_state.connected.load(Ordering::Acquire)
-            {
+            if battery || control.paused.load(Ordering::Acquire) || jobs.is_none() {
                 if paused_at.is_none() {
                     engine.clear_job();
                     status.paused.store(true, Ordering::Release);
@@ -459,29 +455,25 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
                 thread::sleep(Duration::from_millis(25));
                 continue;
             }
-            if let Some(paused) = paused_at.take() {
+            let resumed = if let Some(paused) = paused_at.take() {
                 schedule.deadline += paused.elapsed();
-                engine.install(active.clone())?;
                 status.paused.store(false, Ordering::Release);
-            }
+                true
+            } else {
+                false
+            };
             let phase = schedule.advance(Instant::now());
             status.dev_phase.store(phase, Ordering::Relaxed);
-            let next = if phase {
-                dev_state.job.load_full()
-            } else {
-                user_state.job.load_full()
-            };
-            if let Some(next) = next {
-                if !Arc::ptr_eq(&next, &active) {
-                    if phase {
-                        ensure!(
-                            next.seed == active.seed,
-                            "pool jobs have inconsistent seeds"
-                        );
-                    }
-                    engine.install(next.clone())?;
-                    active = next;
+            let (user_job, dev_job) = jobs.unwrap();
+            let next = if phase { dev_job } else { user_job };
+            if resumed || !Arc::ptr_eq(&next, &active) {
+                let rebuilding = next.seed != active.seed;
+                let started = Instant::now();
+                engine.install(next.clone())?;
+                if rebuilding {
+                    schedule.deadline += started.elapsed();
                 }
+                active = next;
             }
             if last_sample.elapsed() >= Duration::from_millis(500) {
                 status.sample();
@@ -508,14 +500,30 @@ fn run_inner(options: Options, control: Control) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_job(state: &ClientState, control: &Control) -> Result<Arc<Job>> {
-    while !control.stopped() {
-        if let Some(job) = state.job.load_full() {
-            return Ok(job);
+fn synchronized_jobs(
+    user: &ClientState,
+    dev: &ClientState,
+    seed_wait: &mut Option<Instant>,
+    now: Instant,
+) -> Result<Option<(Arc<Job>, Arc<Job>)>> {
+    if user.connected.load(Ordering::Acquire) && dev.connected.load(Ordering::Acquire) {
+        if let (Some(user), Some(dev)) = (user.job.load_full(), dev.job.load_full()) {
+            if user.seed == dev.seed {
+                *seed_wait = None;
+                return Ok(Some((user, dev)));
+            }
+            // Independent pools can publish an epoch change at different times.
+            // Pause both work and the fee clock until their seeds converge.
+            let since = seed_wait.get_or_insert(now);
+            ensure!(
+                now.duration_since(*since) < Duration::from_secs(120),
+                "pool jobs have inconsistent seeds for 120 seconds"
+            );
+            return Ok(None);
         }
-        thread::sleep(Duration::from_millis(25));
     }
-    bail!("pool job unavailable")
+    *seed_wait = None;
+    Ok(None)
 }
 
 struct FeeSchedule {
@@ -566,6 +574,48 @@ impl FeeSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn independent_pool_seed_rollover_pauses_until_both_jobs_match() {
+        let user = ClientState::default();
+        let dev = ClientState::default();
+        user.connected.store(true, Ordering::Release);
+        dev.connected.store(true, Ordering::Release);
+        user.job.store(Some(Arc::new(Job::benchmark([0; 32]))));
+        dev.job.store(Some(Arc::new(Job::benchmark([0; 32]))));
+        let now = Instant::now();
+        let mut waiting = None;
+        assert!(synchronized_jobs(&user, &dev, &mut waiting, now)
+            .unwrap()
+            .is_some());
+        dev.job.store(Some(Arc::new(Job::benchmark([1; 32]))));
+        assert!(synchronized_jobs(&user, &dev, &mut waiting, now)
+            .unwrap()
+            .is_none());
+        assert!(
+            synchronized_jobs(&user, &dev, &mut waiting, now + Duration::from_secs(119))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            synchronized_jobs(&user, &dev, &mut waiting, now + Duration::from_secs(120)).is_err()
+        );
+        user.job.store(Some(Arc::new(Job::benchmark([1; 32]))));
+        let jobs = synchronized_jobs(&user, &dev, &mut waiting, now + Duration::from_secs(121))
+            .unwrap()
+            .unwrap();
+        assert_eq!(jobs.0.seed, [1; 32]);
+        assert!(waiting.is_none());
+        dev.connected.store(false, Ordering::Release);
+        assert!(synchronized_jobs(&user, &dev, &mut waiting, now)
+            .unwrap()
+            .is_none());
+        dev.connected.store(true, Ordering::Release);
+        dev.job.store(None);
+        assert!(synchronized_jobs(&user, &dev, &mut waiting, now)
+            .unwrap()
+            .is_none());
+    }
+
     #[test]
     fn fee_starts_with_dev_then_returns_to_user() {
         let now = Instant::now();

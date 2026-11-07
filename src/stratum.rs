@@ -25,7 +25,10 @@ const LINE_LIMIT: usize = 4 * 1024 * 1024;
 #[derive(Default)]
 pub struct ClientState {
     pub connected: AtomicBool,
+    pub endpoint: Mutex<String>,
     nicehash: AtomicBool,
+    algo: AtomicBool,
+    keepalive: AtomicBool,
     pub submitted: AtomicU64,
     pub accepted: AtomicU64,
     pub rejected: AtomicU64,
@@ -101,6 +104,15 @@ impl ConnectionStop {
 }
 impl Client {
     pub fn start(options: PoolOptions, dev: bool, control: Control) -> Result<Self> {
+        Self::start_pools(vec![options], dev, control)
+    }
+
+    pub(crate) fn start_developer(pools: Vec<PoolOptions>, control: Control) -> Result<Self> {
+        Self::start_pools(pools, true, control)
+    }
+
+    fn start_pools(pools: Vec<PoolOptions>, dev: bool, control: Control) -> Result<Self> {
+        ensure!(!pools.is_empty(), "no pool endpoints");
         let state = Arc::new(ClientState::default());
         let (sender, receiver) = mpsc::sync_channel(QUEUE_LIMIT);
         let submitter = Submitter {
@@ -116,10 +128,16 @@ impl Client {
                 let _panic = control.watch_thread("Stratum worker");
                 let mut session = 0;
                 let mut failures = 0;
+                let mut pool_index = 0;
                 while !thread_stop.stopped() && !control.stopped() {
+                    let options = &pools[pool_index];
+                    *thread_state
+                        .endpoint
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = options.address.url.clone();
                     session += 1;
                     let result = session_loop(
-                        &options,
+                        options,
                         dev,
                         session,
                         &thread_state,
@@ -137,14 +155,22 @@ impl Client {
                     if let Err(error) = result {
                         if !control.stopped() && !thread_stop.stopped() {
                             if dev {
-                                control.fail("required pool connection unavailable");
-                                break;
+                                if failures >= pools.len() {
+                                    control.fail("required pool connection unavailable");
+                                    break;
+                                }
+                                pool_index = (pool_index + 1) % pools.len();
+                                crate::status!(
+                                    "[net] developer connection: {error:#}; switching to {}",
+                                    pools[pool_index].address.authority()
+                                );
+                            } else {
+                                crate::status!("[net] user connection: {error:#}");
                             }
-                            crate::status!("[net] user connection: {error:#}");
                         }
                     }
                     if !dev
-                        && failures >= options.retries
+                        && failures >= options.retries as usize
                         && !control.stopped()
                         && !thread_stop.stopped()
                     {
@@ -303,11 +329,13 @@ fn session_loop(
     control: &Control,
 ) -> Result<()> {
     state.nicehash.store(options.nicehash, Ordering::Relaxed);
+    state.algo.store(false, Ordering::Relaxed);
+    state.keepalive.store(false, Ordering::Relaxed);
     let mut transport = Transport::connect(options, stop, control, dev)?;
     transport.send(json!({"id":1,"jsonrpc":"2.0","method":"login","params":{
         "login":options.user, "pass":options.pass, "rigid":options.rig_id,
         "agent":options.user_agent, "algo":["rx/0"]}}))?;
-    let mut login_id = None;
+    let mut login_id: Option<String> = None;
     let mut pending = HashSet::new();
     let mut next_id = 2u64;
     let mut buffer = Vec::new();
@@ -333,15 +361,15 @@ fn session_loop(
                     }
                     let id = next_id;
                     next_id += 1;
-                    transport.send(json!({"id":id,"jsonrpc":"2.0","method":"submit","params":{
-                        "id":login_id,"job_id":share.job_id,"nonce":hex::encode(share.nonce.to_le_bytes()),"result":hex::encode(share.hash)}}))?;
+                    transport.send(share_request(id, login_id, &share, state))?;
                     pending.insert(id);
                     state.submitted.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            let keepalive = keepalive_interval(options, state);
             if login_id.is_some()
-                && options.keepalive > 0
-                && last_keepalive.elapsed() >= Duration::from_secs(options.keepalive)
+                && keepalive > 0
+                && last_keepalive.elapsed() >= Duration::from_secs(keepalive)
             {
                 transport.send(json!({"id":next_id,"jsonrpc":"2.0","method":"keepalived","params":{"id":login_id}}))?;
                 next_id += 1;
@@ -393,6 +421,23 @@ fn session_loop(
     result
 }
 
+fn keepalive_interval(options: &PoolOptions, state: &ClientState) -> u64 {
+    if options.keepalive_auto && state.keepalive.load(Ordering::Relaxed) {
+        60
+    } else {
+        options.keepalive
+    }
+}
+
+fn share_request(id: u64, login_id: &str, share: &Share, state: &ClientState) -> Value {
+    let mut request = json!({"id":id,"jsonrpc":"2.0","method":"submit","params":{
+        "id":login_id,"job_id":share.job_id,"nonce":hex::encode(share.nonce.to_le_bytes()),"result":hex::encode(share.hash)}});
+    if state.algo.load(Ordering::Relaxed) {
+        request["params"]["algo"] = "rx/0".into();
+    }
+    request
+}
+
 fn handle_message(
     message: Value,
     mode: (bool, bool),
@@ -427,11 +472,17 @@ fn handle_message(
             .filter(|id| !id.is_empty())
             .context("login response has no session id")?;
         let mut job = Job::parse(result["job"].clone(), dev, session)?;
-        job.nicehash = nicehash
-            || result["extensions"]
+        let extension = |name: &str| {
+            result["extensions"]
                 .as_array()
-                .is_some_and(|xs| xs.iter().any(|x| x == "nicehash"));
+                .is_some_and(|xs| xs.iter().any(|x| x == name))
+        };
+        job.nicehash = nicehash || extension("nicehash");
         state.nicehash.store(job.nicehash, Ordering::Relaxed);
+        state.algo.store(extension("algo"), Ordering::Relaxed);
+        state
+            .keepalive
+            .store(extension("keepalive"), Ordering::Relaxed);
         *login_id = Some(id.into());
         state.job.store(Some(Arc::new(job)));
         state.connected.store(true, Ordering::Release);
@@ -454,6 +505,194 @@ mod tests {
     use crate::config::{Cli, Options};
     use clap::Parser;
     use std::{net::TcpListener, sync::Barrier};
+
+    fn await_condition(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(Instant::now() < deadline, "Stratum test timed out");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn developer_failover_keeps_session_boundaries_and_reports_endpoint() {
+        use std::io::{BufRead, BufReader};
+        let mut pools = Vec::new();
+        let mut servers = Vec::new();
+        let mut releases = Vec::new();
+        for number in 1..=2u32 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let mut pool = Options::from_cli(
+                Cli::try_parse_from([
+                    "rxminer",
+                    "-o",
+                    &address,
+                    "-u",
+                    crate::miner::DEV_ADDRESS,
+                    "--no-proxy",
+                ])
+                .unwrap(),
+            )
+            .unwrap()
+            .pool
+            .unwrap();
+            pool.retry_pause = 0;
+            pools.push(pool);
+            let (release, receiver) = mpsc::channel();
+            releases.push(release);
+            servers.push(thread::spawn(move || {
+                let mut socket = None;
+                await_condition(|| match listener.accept() {
+                    Ok((peer, _)) => {
+                        socket = Some(peer);
+                        true
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+                    Err(e) => panic!("accept: {e}"),
+                });
+                let socket = socket.unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut peer = BufReader::new(socket);
+                let mut line = String::new();
+                peer.read_line(&mut line).unwrap();
+                let login: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(login["params"]["login"], crate::miner::DEV_ADDRESS);
+                let response = json!({"id":1,"result":{"id":format!("session-{number}"),
+                    "extensions":["algo"], "job":{"job_id":"same-id", "blob":"00".repeat(76),
+                    "seed_hash":"00".repeat(32), "target":"ffffffff"}}});
+                writeln!(peer.get_mut(), "{response}").unwrap();
+                line.clear();
+                peer.read_line(&mut line).unwrap();
+                let share: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(share["method"], "submit");
+                assert_eq!(share["params"]["id"], format!("session-{number}"));
+                assert_eq!(share["params"]["nonce"], hex::encode(number.to_le_bytes()));
+                assert_eq!(share["params"]["algo"], "rx/0");
+                writeln!(
+                    peer.get_mut(),
+                    "{}",
+                    json!({"id":share["id"],"error":null,"result":{"status":"OK"}})
+                )
+                .unwrap();
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+                peer.get_mut().shutdown(Shutdown::Both).unwrap();
+            }));
+        }
+        let backup = pools[1].address.url.clone();
+        let control = Control::new(Arc::new(AtomicBool::new(false)));
+        let mut client = Client::start_developer(pools, control.clone()).unwrap();
+        await_condition(|| client.state.connected.load(Ordering::Acquire));
+        let old = client.state.job.load_full().unwrap();
+        client.submitter.submit(&old, 1, [0; 32]);
+        await_condition(|| client.state.accepted.load(Ordering::Relaxed) == 1);
+        releases[0].send(()).unwrap();
+        await_condition(|| {
+            client
+                .state
+                .job
+                .load_full()
+                .is_some_and(|job| job.session != old.session)
+        });
+        let current = client.state.job.load_full().unwrap();
+        client.submitter.submit(&old, 99, [0; 32]);
+        client.submitter.submit(&current, 2, [0; 32]);
+        await_condition(|| client.state.accepted.load(Ordering::Relaxed) == 2);
+        assert_eq!(client.state.rejected.load(Ordering::Relaxed), 1);
+        assert_eq!(*client.state.endpoint.lock().unwrap(), backup);
+        assert!(!control.stopped());
+        client.stop();
+        releases[1].send(()).unwrap();
+        for server in servers {
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn exhausted_developer_endpoints_stop_mining() {
+        let listeners: Vec<_> = (0..2)
+            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+            .collect();
+        let pools = listeners
+            .iter()
+            .map(|listener| {
+                let address = listener.local_addr().unwrap().to_string();
+                let mut pool = Options::from_cli(
+                    Cli::try_parse_from(["rxminer", "-o", &address, "-u", "test", "--no-proxy"])
+                        .unwrap(),
+                )
+                .unwrap()
+                .pool
+                .unwrap();
+                pool.retry_pause = 0;
+                pool
+            })
+            .collect();
+        drop(listeners);
+        let control = Control::new(Arc::new(AtomicBool::new(false)));
+        let mut client = Client::start_developer(pools, control.clone()).unwrap();
+        await_condition(|| control.stopped());
+        assert_eq!(
+            control.error().as_deref(),
+            Some("required pool connection unavailable")
+        );
+        assert!(!client.state.connected.load(Ordering::Acquire));
+        assert!(client.state.job.load_full().is_none());
+        client.stop();
+    }
+
+    #[test]
+    fn negotiated_extensions_control_submits_and_idle_keepalives() {
+        let state = ClientState::default();
+        let mut login = None;
+        let mut pending = HashSet::new();
+        let options = Options::from_cli(
+            Cli::try_parse_from([
+                "rxminer",
+                "-o",
+                "localhost:3333",
+                "-u",
+                "test",
+                "--no-proxy",
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let mut pool = options.pool.unwrap();
+        let share = Share {
+            job_id: "job".into(),
+            session: 1,
+            nonce: 0xab123456,
+            hash: [0x12; 32],
+        };
+        // A reconnect to a server without extensions must clear the old capabilities.
+        for extensions in [json!(["algo", "nicehash", "keepalive"]), json!([])] {
+            let advertised = !extensions.as_array().unwrap().is_empty();
+            handle_message(json!({"id":1,"result":{"id":"session", "extensions":extensions,
+                "job":{"job_id":"job", "blob":"00".repeat(76), "seed_hash":"00".repeat(32), "target":"ffffffff"}}}),
+                (false, false), 1, &state, &mut login, &mut pending).unwrap();
+            let request = share_request(2, "session", &share, &state);
+            assert_eq!(request["params"]["nonce"], "563412ab");
+            assert_eq!(request["params"].get("algo").is_some(), advertised);
+            if advertised {
+                assert_eq!(request["params"]["algo"], "rx/0");
+            }
+            assert_eq!(state.job.load_full().unwrap().nicehash, advertised);
+            pool.keepalive_auto = true;
+            pool.keepalive = 0;
+            assert_eq!(
+                keepalive_interval(&pool, &state),
+                if advertised { 60 } else { 0 }
+            );
+            pool.keepalive_auto = false;
+            assert_eq!(keepalive_interval(&pool, &state), 0);
+            pool.keepalive = 7;
+            assert_eq!(keepalive_interval(&pool, &state), 7);
+        }
+    }
 
     #[test]
     fn stop_racing_socket_registration_never_leaves_a_live_socket() {

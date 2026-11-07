@@ -121,7 +121,7 @@ instruction-extension coverage require further testing.
 The verified platform targets above run Rust checks, known hash vectors, JIT/interpreter
 agreement, full-memory and light-mode mining, and local Cargo installation.
 Full-memory shares are checked against the light interpreter across concurrent
-job updates, developer-fee switches and seed changes. Worker startup failures
+job updates and seed changes. Worker startup failures
 and panics must stop the other workers and clear shared state.
 Native checks compare full-capacity and active-length AES program generation,
 including seed preservation and untouched buffer tails. On x86-64 and ARM64,

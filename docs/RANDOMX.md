@@ -9,8 +9,7 @@ integrated RandomX C/C++ library for hashing and JIT execution. See [platform su
 - CPU affinity, per-node NUMA datasets and a shared-dataset fallback.
 - Transparent huge-page hints and optional explicit 2 MiB pages.
 - TLS or plaintext Stratum, with HTTP CONNECT and SOCKS5 proxy support.
-- A built-in developer fee below 1%; benchmark mode has no pool connection
-  or fee.
+- Offline benchmarks without a pool connection.
 
 The miner accepts `rx/0` jobs. Native regression coverage also exercises
 RandomX v2, but this does not enable v2 pool jobs or other mining algorithms.

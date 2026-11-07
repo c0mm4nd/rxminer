@@ -16,8 +16,8 @@ cargo build --release --locked
 
 Builds use portable CPU settings by default. See the
 [performance guide](OPTIMIZATION.md#build) for host-specific builds and optional
-VAES support. Do not distribute binaries built with `test-dev-fee` enabled.
-That feature uses a deterministic 0.9% fee over five-second cycles for tests.
+VAES support. Test builds are for local regressions and must not be distributed;
+use default features for releases.
 
 ## Standard checks
 
@@ -54,9 +54,12 @@ memory. They use Rust fixtures bound to loopback, generate temporary TLS
 certificates through the OpenSSL library, and never connect to public pools.
 
 Coverage includes TLS and certificate rejection, HTTP CONNECT and SOCKS5,
-user/developer shares, nonce continuity, fatal developer disconnection, pool
-failover, NiceHash nonce prefixes, keepalive, logging, authenticated HTTPS
+share submission, nonce continuity, connection failure, pool failover,
+NiceHash nonce prefixes, keepalive, logging, authenticated HTTPS
 control, pause/resume, configuration reload, background execution and autosave.
+The pool fixture requires negotiated `algo` fields in share submissions.
+Unit tests cover TLS policy, endpoint failover, stale-session shares and seed
+rollover synchronization. All automated regressions use local fixtures.
 Fixture sockets are closed and threads are joined during teardown. Miner
 subprocesses have deadlines and failure logs are retained in test output.
 
@@ -82,7 +85,7 @@ The CI workflow runs GCC with Rust 1.88 on Ubuntu 22.04 and Clang with stable
 Rust on Ubuntu 24.04. Both jobs run correctness and protocol checks; the stable
 job additionally verifies packaging and installation. Expensive tests run
 sequentially to limit dataset memory use. Release builds use default features;
-the accelerated developer-fee test binary has a separate target directory.
+the network regression binary has a separate target directory.
 
 Cross-platform runners additionally execute:
 

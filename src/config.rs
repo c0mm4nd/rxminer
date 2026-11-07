@@ -181,7 +181,7 @@ impl Default for PoolConfig {
             tls_verify: false,
             tls_ca: None,
             nicehash: false,
-            keepalive: Value::Bool(false),
+            keepalive: Value::Null,
             daemon: false,
             self_select: None,
             submit_to_origin: false,
@@ -359,6 +359,7 @@ pub struct PoolOptions {
     pub proxy: Option<Proxy>,
     pub nicehash: bool,
     pub keepalive: u64,
+    pub keepalive_auto: bool,
     pub retries: u32,
     pub retry_pause: u64,
     pub user_agent: String,
@@ -750,14 +751,16 @@ impl Options {
             !pool.daemon && pool.self_select.is_none() && !pool.submit_to_origin,
             "daemon and self-select modes are not supported"
         );
+        let keepalive_auto = !cli.keepalive && pool.keepalive.is_null();
         let keepalive = if cli.keepalive {
             60
         } else {
             match pool.keepalive {
+                Value::Null => 0,
                 Value::Bool(true) => 60,
                 Value::Bool(false) => 0,
                 Value::Number(n) => n.as_u64().context("keepalive must be nonnegative")?,
-                _ => bail!("keepalive must be boolean or seconds"),
+                _ => bail!("keepalive must be null, boolean or seconds"),
             }
         };
         ensure!(keepalive <= 86400, "keepalive must be 0..86400 seconds");
@@ -821,6 +824,7 @@ impl Options {
                 proxy,
                 nicehash: pool.nicehash || cli.nicehash,
                 keepalive,
+                keepalive_auto,
                 retries,
                 retry_pause,
                 user_agent,
@@ -1129,12 +1133,55 @@ mod tests {
     }
 
     #[test]
+    fn keepalive_defaults_to_negotiation_and_respects_explicit_overrides() {
+        for (setting, automatic, seconds) in [
+            ("null", true, 0),
+            ("false", false, 0),
+            ("true", false, 60),
+            ("7", false, 7),
+        ] {
+            let config = format!(
+                r#"{{"pools":[{{"url":"localhost:3333","user":"test","keepalive":{setting}}}]}}"#
+            );
+            let pool = options(&["rxminer", "--no-proxy"], &config)
+                .unwrap()
+                .pool
+                .unwrap();
+            assert_eq!(pool.keepalive_auto, automatic);
+            assert_eq!(pool.keepalive, seconds);
+            let forced = options(&["rxminer", "--no-proxy", "-k"], &config)
+                .unwrap()
+                .pool
+                .unwrap();
+            assert!(!forced.keepalive_auto);
+            assert_eq!(forced.keepalive, 60);
+        }
+        let pool = options(
+            &[
+                "rxminer",
+                "--no-proxy",
+                "-o",
+                "localhost:3333",
+                "-u",
+                "test",
+            ],
+            "{}",
+        )
+        .unwrap()
+        .pool
+        .unwrap();
+        assert!(pool.keepalive_auto);
+    }
+
+    #[test]
     fn rejects_unsupported_and_misspelled_configuration() {
         for json in [
             r#"{"cpu":{"huge_pages":false}}"#,
             r#"{"pool":"pool.example"}"#,
             r#"{"cpu":{"enabled":false}}"#,
             r#"{"donate-level":0}"#,
+            r#"{"dev-pool":null}"#,
+            r#"{"dev-pool":{"url":"pool.invalid:3333"}}"#,
             r#"{"cpu":{"rx":[[2,0]]}}"#,
             r#"{"benchmark":{"submit":true}}"#,
             r#"{"http":{"enabled":true,"port":0}}"#,
@@ -1148,6 +1195,7 @@ mod tests {
             vec!["rxminer", "-v"],
             vec!["rxminer", "--dev-fee", "0"],
             vec!["rxminer", "--donate-level", "0"],
+            vec!["rxminer", "--dev-pool", "pool.invalid:3333"],
             vec!["rxminer", "-t", "2junk"],
             vec!["rxminer", "--benchmark", "0"],
         ] {

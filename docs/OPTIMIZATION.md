@@ -20,8 +20,8 @@ Use the portable build for distribution. Cargo builds the native RandomX
 library directly; CMake, Make and Ninja are not required. The optional `vaes`
 feature enables runtime-dispatched VAES kernels on x86-64 with GCC or Clang;
 other targets use the default AES kernels. It is off
-by default and should be measured separately. Never distribute a build with
-`test-dev-fee` enabled.
+by default and should be measured separately. Test builds are for local
+regressions and must not be distributed.
 
 ## Threads and memory
 
@@ -88,7 +88,7 @@ Requesting huge pages alone does not establish that they were allocated.
 
 Each worker owns its VM and shares an initialized dataset through `Arc`.
 Seed changes join workers before replacing datasets. Hash counts are flushed
-on exit, and unchanged jobs preserve nonce progress across fee windows.
+on exit, and unchanged jobs preserve nonce progress when work resumes.
 Worker failures notify the coordinator and roll back partially started work.
 TLS and proxy handshakes poll cancellation with bounded deadlines. Stopping
 also shuts down registered sockets.

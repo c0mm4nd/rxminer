@@ -26,16 +26,27 @@ identical automatic CPU selection or identical API responses in other miners.
 | `--tls-fingerprint` | `pools[].tls-fingerprint` | SHA-256 certificate pin |
 | `-x`, `--proxy` | `pools[].socks5` | SOCKS5; bare host:port uses remote DNS |
 | `--nicehash` | `pools[].nicehash` | Preserve the nonce prefix and enumerate the lower 24 bits |
-| `-k`, `--keepalive` | `pools[].keepalive` | `true` sends every 60 seconds; JSON also accepts seconds; `false` disables |
+| `-k`, `--keepalive` | `pools[].keepalive` | Omitted/`null`: every 60 seconds if the server advertises keepalive; `true` forces 60 seconds; JSON also accepts seconds; `false`/`0` disables |
 | `-r`, `--retries` | `retries` | Attempts before switching pools; default 5 |
 | `-R`, `--retry-pause` | `retry-pause` | Seconds between attempts; default 5 |
 | `--user-agent` | `user-agent` | Login agent string |
 
 The first enabled pool is primary; other enabled entries are backups. All
-workers and connections stop before another pool starts. A single-pool developer
-connection failure remains fatal; with backups, mining stops while reconnecting
-or switching. The built-in fee is retained on each selected pool.
+workers and connections stop before another user pool starts.
 NiceHash support can also be negotiated by the login response.
+Share submissions include `algo: "rx/0"` when the server advertises the `algo`
+extension. Negotiated capabilities are reset on reconnect.
+
+### Stratum proxies
+
+Use `pools[].url` (or `-o`) for xmrig-proxy or P2Pool. `--proxy` is a
+SOCKS5/HTTP CONNECT transport setting, not a Stratum proxy address.
+
+xmrig-proxy's NiceHash and Simple modes, and P2Pool, use their own configured
+payout wallet. Changing a miner login wallet does not change that payout.
+
+Existing configurations with `keepalive: false` still disable heartbeats.
+Use `null` for negotiation or `true` to enable them explicitly for the user pool.
 
 `dns.ip_version` accepts 0 (both), 4 or 6; `dns.ttl` caches successful local
 lookups for that many seconds (default 30, zero disables caching). A bounded
@@ -118,8 +129,8 @@ Log files append; syslog uses the local Unix socket.
 `print-time` controls speed output; `health-print-time` controls available-memory
 and worker-count output. Both default to 60 seconds; zero disables periodic output.
 `pause-on-battery`/`--pause-on-battery` pauses mining when Linux reports a
-discharging battery without an online external power supply. Pauses freeze the
-fee schedule and preserve nonce progress.
+discharging battery without an online external power supply. Pauses preserve
+nonce progress.
 
 ## HTTP API
 
@@ -154,7 +165,7 @@ are not interchangeable with other miners' benchmark results.
 
 `--benchmark-seconds N` (legacy `--benchmark N`) and `benchmark.seconds` run a
 timed test; checksum verification requires an exact-count test. Benchmarks have
-no pool connection or developer fee. Online `submit` and remote-ID `verify`
+no pool connection. Online `submit` and remote-ID `verify`
 options are removed, with no calls to an external benchmark service.
 
 ## Remaining implementation work
@@ -168,6 +179,3 @@ These features are still unavailable and must not be treated as implemented:
 - AVX2 dataset initialization (`randomx.init-avx2: 1`); selecting an AVX2 Argon2
   cache kernel is a different setting. Values -1/0 retain the current initializer.
 - Activity-based pausing and the complete external HTTP API schema.
-
-The developer fee remains fixed and unchanged. `donate-level` and
-`donate-over-proxy` are not accepted. No external donation endpoint is introduced.
