@@ -42,10 +42,12 @@ rx_vec_i128 soft_aesenc(rx_vec_i128 in, rx_vec_i128 key);
 
 rx_vec_i128 soft_aesdec(rx_vec_i128 in, rx_vec_i128 key);
 
-#if !defined(RXM_AES_LEGACY) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+#if !defined(RXM_AES_LEGACY) && (defined(__aarch64__) || ((defined(__x86_64__) || defined(_M_X64)) && !defined(__clang__)))
 // Inline the table round, following XMRig's BSD-licensed aesenc/aesdec<2>
 // (b2ca72480c58d197e18c885d9fc1a0c8d517e60a). Keep the out-of-line API for
-// the portable fallback and differential tests. Only immutable tables are shared.
+// the portable fallback and differential tests. Clang x86 retains calls: both
+// inline lookup layouts regressed in same-buffer kernel comparisons. Only
+// immutable tables are shared; ARM64 Clang benefits from inlining these rounds.
 template<bool decrypt>
 FORCE_INLINE rx_vec_i128 rxm_soft_aes_round(rx_vec_i128 in, rx_vec_i128 key) {
 	const uint32_t (*lut)[256] = decrypt ? randomx_aes_lut_dec : randomx_aes_lut_enc;

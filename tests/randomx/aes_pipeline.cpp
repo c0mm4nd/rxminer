@@ -43,7 +43,7 @@ static void rounds() {
         rx_store_vec_i128(reinterpret_cast<rx_vec_i128*>(actual), aesdec<true>(input, roundKey));
         require(std::memcmp(expected, actual, 16) == 0);
     }
-    std::puts("PASSED inline/out-of-line AES rounds: 8192 cases");
+    std::puts("PASSED software AES round equivalence: 8192 cases");
 }
 
 template<bool soft>
