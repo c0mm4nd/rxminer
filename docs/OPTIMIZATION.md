@@ -49,6 +49,8 @@ mode selection are described in the [configuration reference](CONFIGURATION.md).
 ## Implemented optimizations
 
 - JIT-assisted dataset initialization and runtime CPU-feature selection.
+- Dataset initializers claim disjoint 4 MiB blocks as they finish work, reducing
+  startup delays from slower or busier cores while retaining NUMA placement.
 - Large-allocation alignment and huge-page hints; small VM/JIT objects use
   ordinary page alignment without unnecessary over-allocation.
 - Pipelined hashing, reusable input buffers and cached task snapshots.

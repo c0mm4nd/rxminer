@@ -8,7 +8,7 @@ use std::{
     ptr::NonNull,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     thread,
@@ -20,6 +20,15 @@ const FULL_MEM: u32 = 4;
 const JIT: u32 = 8;
 const SECURE: u32 = 16;
 const ARGON2: u32 = 96;
+
+// Each claim covers at most 4 MiB (65,536 dataset items). Faster initializer
+// cores can take more work instead of waiting for a static partition on a slow
+// core. The small number of claims keeps coordination off the inner item loop.
+fn claim_dataset_chunk(next: &AtomicU64, items: u64) -> Option<(u64, u64)> {
+    const CHUNK_ITEMS: u64 = 1 << 16;
+    let start = next.fetch_add(CHUNK_ITEMS, Ordering::Relaxed);
+    (start < items).then(|| (start, (items - start).min(CHUNK_ITEMS)))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MemoryMode {
@@ -290,13 +299,13 @@ impl Dataset {
         #[allow(clippy::unnecessary_cast)] // C unsigned long is 32-bit on Windows.
         // SAFETY: constant item count of the integrated implementation.
         let items = unsafe { randomx_dataset_item_count() } as u64;
+        let next = AtomicU64::new(0);
         thread::scope(|scope| -> Result<()> {
             let mut handles = Vec::new();
-            for (index, core) in cores.iter().enumerate() {
+            for core in cores {
                 let dataset = &dataset;
                 let cache = &cache;
-                let begin = items * index as u64 / cores.len() as u64;
-                let end = items * (index + 1) as u64 / cores.len() as u64;
+                let next = &next;
                 handles.push(
                     thread::Builder::new()
                         .name(format!("rx-init-{}", core.cpu))
@@ -307,15 +316,17 @@ impl Dataset {
                             if let Some(node) = node {
                                 let _ = topology::bind_node(node);
                             }
-                            let mut start = begin;
-                            while start < end {
+                            loop {
                                 ensure!(
                                     !stop.load(Ordering::Relaxed),
                                     "initialization interrupted"
                                 );
-                                let count = (end - start).min(1 << 16);
-                                // SAFETY: [begin,end) partitions are disjoint and in bounds.
-                                // Both allocations remain alive until the scope joins.
+                                let Some((start, count)) = claim_dataset_chunk(next, items) else {
+                                    break;
+                                };
+                                // SAFETY: atomic claims are disjoint and in bounds.
+                                // Both allocations remain alive until every initializer
+                                // has joined; the dataset is not published before then.
                                 #[allow(clippy::unnecessary_cast)]
                                 // Bounds are below the c_ulong item count.
                                 unsafe {
@@ -326,7 +337,6 @@ impl Dataset {
                                         count as c_ulong,
                                     );
                                 }
-                                start += count;
                             }
                             Ok(())
                         })
@@ -501,6 +511,70 @@ pub(crate) fn light_hashes(seed: &[u8], blobs: &[Vec<u8>]) -> Vec<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dataset_chunks_cover_every_item_once() {
+        for items in [0, 1, 65_535, 65_536, 65_537, 4_194_321] {
+            let next = AtomicU64::new(0);
+            let mut chunks = thread::scope(|scope| {
+                let workers: Vec<_> = (0..16)
+                    .map(|_| {
+                        let next = &next;
+                        scope.spawn(move || {
+                            let mut chunks = Vec::new();
+                            while let Some(chunk) = claim_dataset_chunk(next, items) {
+                                chunks.push(chunk);
+                                thread::yield_now();
+                            }
+                            chunks
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .flat_map(|worker| worker.join().unwrap())
+                    .collect::<Vec<_>>()
+            });
+            chunks.sort_unstable();
+            let mut end = 0;
+            for (start, count) in chunks {
+                assert_eq!(start, end, "gap or overlapping dataset writes");
+                assert!((1..=65_536).contains(&count));
+                end += count;
+            }
+            assert_eq!(end, items);
+        }
+    }
+
+    #[test]
+    fn slow_initializer_does_not_hold_a_static_partition() {
+        let items = 65_536 * 8 + 17;
+        let next = AtomicU64::new(0);
+        thread::scope(|scope| {
+            let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let next = &next;
+            let slow = scope.spawn(move || {
+                let chunk = claim_dataset_chunk(next, items).unwrap();
+                claimed_tx.send(chunk).unwrap();
+                // Closing the sender also releases this thread on test failure.
+                let _ = resume_rx.recv();
+                assert!(claim_dataset_chunk(next, items).is_none());
+            });
+            let (start, mut completed) = claimed_rx.recv().unwrap();
+            assert_eq!(start, 0);
+            // The available initializer can consume all remaining work while
+            // the other one is stalled; no thread owns an unfinished tail.
+            while let Some((start, count)) = claim_dataset_chunk(next, items) {
+                assert_eq!(start, completed);
+                completed += count;
+            }
+            assert_eq!(completed, items);
+            resume_tx.send(()).unwrap();
+            slow.join().unwrap();
+        });
+    }
+
     #[test]
     fn shared_light_cache_and_native_tuning_preserve_consensus() {
         let expected =

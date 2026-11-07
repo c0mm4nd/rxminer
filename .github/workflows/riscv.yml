@@ -61,7 +61,7 @@ jobs:
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 40
-        run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings 2>&1 | tee "$RUNNER_TEMP/riscv-logs/lint.log"
+        run: cargo clippy --locked --release --all-targets --features test-dev-fee -- -D warnings 2>&1 | tee "$RUNNER_TEMP/riscv-logs/lint.log"
       - name: Unit tests, known hashes, shared cache and CLI
         id: unit
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
