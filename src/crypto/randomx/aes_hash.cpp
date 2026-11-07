@@ -323,6 +323,36 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 	scratchpadEnd -= PREFETCH_DISTANCE;
 
 	for (int i = 0; i < 2; ++i) {
+#if !defined(RXM_AES_LEGACY) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+		// XMRig's hardware-AES schedule: consume two original blocks before
+		// refilling either. Explicit batching also applies to MSVC, which does
+		// not use the GCC loop-unrolling hint below. Retain a single-block tail.
+		if (!softAes) {
+			while (scratchpadEnd - scratchpadPtr >= 128) {
+				for (unsigned block = 0; block < 2; ++block) {
+					const auto* input = (rx_vec_i128*)scratchpadPtr + block * 4;
+					hash_state0 = aesenc<false>(hash_state0, rx_load_vec_i128(input + 0));
+					hash_state1 = aesdec<false>(hash_state1, rx_load_vec_i128(input + 1));
+					hash_state2 = aesenc<false>(hash_state2, rx_load_vec_i128(input + 2));
+					hash_state3 = aesdec<false>(hash_state3, rx_load_vec_i128(input + 3));
+				}
+				for (unsigned block = 0; block < 2; ++block) {
+					auto* output = (rx_vec_i128*)scratchpadPtr + block * 4;
+					fill_state0 = aesdec<false>(fill_state0, key0);
+					fill_state1 = aesenc<false>(fill_state1, key1);
+					fill_state2 = aesdec<false>(fill_state2, key2);
+					fill_state3 = aesenc<false>(fill_state3, key3);
+					rx_store_vec_i128(output + 0, fill_state0);
+					rx_store_vec_i128(output + 1, fill_state1);
+					rx_store_vec_i128(output + 2, fill_state2);
+					rx_store_vec_i128(output + 3, fill_state3);
+					rx_prefetch_t0(prefetchPtr + block * 64);
+				}
+				scratchpadPtr += 128;
+				prefetchPtr += 128;
+			}
+		}
+#endif
 		//process 64 bytes at a time in 4 lanes
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC unroll 2

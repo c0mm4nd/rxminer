@@ -38,6 +38,7 @@ fn native_vectors() -> Result<()> {
         "jit_normalization",
         "blake_fixed",
         "blake_rounds",
+        "aes_pipeline",
     ] {
         let binary = temp
             .0
@@ -59,15 +60,15 @@ fn native_vectors() -> Result<()> {
                 command.arg("-march=armv8-a+crypto");
             }
         }
-        command
-            .arg(root().join(format!("tests/randomx/{source}.cpp")))
-            .arg(&library);
-        if source == "blake_rounds" {
+        command.arg(root().join(format!("tests/randomx/{source}.cpp")));
+        if matches!(source, "blake_rounds" | "aes_pipeline") {
+            let aes = source == "aes_pipeline";
             let mut reference = cc::Build::new();
             reference
                 .host(host)
                 .target(host)
-                .std("c11")
+                .cpp(aes)
+                .std(if aes { "c++11" } else { "c11" })
                 .opt_level(3)
                 .debug(false)
                 .pic(true)
@@ -76,7 +77,14 @@ fn native_vectors() -> Result<()> {
                 .cargo_metadata(false)
                 .out_dir(&temp.0)
                 .include(root().join("src/crypto/randomx"))
-                .file(root().join("tests/randomx/blake_compact.c"));
+                .file(root().join(if aes {
+                    "tests/randomx/aes_legacy.cpp"
+                } else {
+                    "tests/randomx/blake_compact.c"
+                }));
+            if compiler.is_like_msvc() && cfg!(target_arch = "x86_64") {
+                reference.define("__AES__", None);
+            }
             if !compiler.is_like_msvc() {
                 reference.flag_if_supported("-fno-semantic-interposition");
                 if cfg!(target_arch = "x86_64") {
@@ -91,6 +99,7 @@ fn native_vectors() -> Result<()> {
             }
             command.args(reference.compile_intermediates());
         }
+        command.arg(&library);
         if compiler.is_like_msvc() {
             command
                 .arg("advapi32.lib")
@@ -104,7 +113,9 @@ fn native_vectors() -> Result<()> {
             300,
         )?;
         let mut execute = Command::new(binary);
-        if source == "blake_rounds" && std::env::var("RXMINER_SHORT_BENCH").as_deref() == Ok("1") {
+        if matches!(source, "blake_rounds" | "aes_pipeline")
+            && std::env::var("RXMINER_SHORT_BENCH").as_deref() == Ok("1")
+        {
             execute.arg("--sample");
         }
         let output = run(
@@ -115,6 +126,9 @@ fn native_vectors() -> Result<()> {
         println!("{output}");
         if source == "blake_rounds" {
             write_short_summary(&output)?;
+        }
+        if source == "aes_pipeline" {
+            write_aes_summary(&output)?;
         }
     }
     Ok(())
@@ -143,7 +157,36 @@ fn write_short_summary(output: &str) -> Result<()> {
     }
     if !rows.is_empty() {
         let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
-        writeln!(summary, "### BLAKE2b preparation: short sample\n\nSame process, same C compiler and optimization level; alternating compact/reference and current/archive runs. Median nanoseconds per operation; ratio = compact / current. Sampling budget: 1 second, checked between fixed batches. Informational only: shared-runner timings are not mining hashrate and do not gate correctness.\n\n| Input → digest | Sample pairs | Compact ns/op | Current ns/op | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
+        writeln!(summary, "### BLAKE2b preparation: short sample\n\nSame process, same C compiler and optimization level; alternating compact/reference and current/archive runs. Median nanoseconds per operation; ratio = compact / current. Sampling budget: 500 ms, checked between fixed batches. Informational only: shared-runner timings are not mining hashrate and do not gate correctness.\n\n| Input → digest | Sample pairs | Compact ns/op | Current ns/op | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
+    }
+    Ok(())
+}
+
+fn write_aes_summary(output: &str) -> Result<()> {
+    let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+        return Ok(());
+    };
+    let mut rows = String::new();
+    for line in output
+        .lines()
+        .filter_map(|line| line.strip_prefix("RXM_AES_SAMPLE "))
+    {
+        let row: serde_json::Value = serde_json::from_str(line)?;
+        let legacy = row["legacy_ns"].as_f64().context("legacy AES timing")?;
+        let current = row["current_ns"].as_f64().context("current AES timing")?;
+        ensure!(legacy > 0.0 && current > 0.0, "invalid AES timing");
+        rows.push_str(&format!(
+            "| {} | {} | {:.3} | {:.3} | {:.3}× |\n",
+            row["mode"].as_str().context("AES mode")?,
+            row["pairs"],
+            legacy / 1e6,
+            current / 1e6,
+            legacy / current
+        ));
+    }
+    if !rows.is_empty() {
+        let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
+        writeln!(summary, "### AES scratchpad hash/refill: short sample\n\nOne 2 MiB scratchpad per call; same compiler and optimization level, alternating old/current paths. Complete scratchpad, hash and generator state compared outside timing. Median milliseconds per call; ratio = legacy / current. Sampling budget: 500 ms, checked between pairs. BLAKE2b and AES together budget 1 second plus the final bounded batch. These are kernel timings, not mining hashrate; performance does not gate correctness.\n\n| AES mode | Sample pairs | Legacy ms | Current ms | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
     }
     Ok(())
 }

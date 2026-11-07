@@ -1,5 +1,6 @@
 /*
 Copyright (c) 2018-2019, tevador <tevador@gmail.com>
+Copyright (c) 2019 SChernykh <https://github.com/SChernykh>
 
 All rights reserved.
 
@@ -41,6 +42,33 @@ rx_vec_i128 soft_aesenc(rx_vec_i128 in, rx_vec_i128 key);
 
 rx_vec_i128 soft_aesdec(rx_vec_i128 in, rx_vec_i128 key);
 
+#if !defined(RXM_AES_LEGACY) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+// Inline the table round, following XMRig's BSD-licensed aesenc/aesdec<2>
+// (b2ca72480c58d197e18c885d9fc1a0c8d517e60a). Keep the out-of-line API for
+// the portable fallback and differential tests. Only immutable tables are shared.
+template<bool decrypt>
+FORCE_INLINE rx_vec_i128 rxm_soft_aes_round(rx_vec_i128 in, rx_vec_i128 key) {
+	const uint32_t (*lut)[256] = decrypt ? randomx_aes_lut_dec : randomx_aes_lut_enc;
+	const uint32_t s0 = rx_vec_i128_w(in), s1 = rx_vec_i128_z(in);
+	const uint32_t s2 = rx_vec_i128_y(in), s3 = rx_vec_i128_x(in);
+	const rx_vec_i128 out = rx_set_int_vec_i128(
+		lut[0][s0 & 255] ^ lut[1][((decrypt ? s1 : s3) >> 8) & 255] ^ lut[2][(s2 >> 16) & 255] ^ lut[3][(decrypt ? s3 : s1) >> 24],
+		lut[0][s1 & 255] ^ lut[1][((decrypt ? s2 : s0) >> 8) & 255] ^ lut[2][(s3 >> 16) & 255] ^ lut[3][(decrypt ? s0 : s2) >> 24],
+		lut[0][s2 & 255] ^ lut[1][((decrypt ? s3 : s1) >> 8) & 255] ^ lut[2][(s0 >> 16) & 255] ^ lut[3][(decrypt ? s1 : s3) >> 24],
+		lut[0][s3 & 255] ^ lut[1][((decrypt ? s0 : s2) >> 8) & 255] ^ lut[2][(s1 >> 16) & 255] ^ lut[3][(decrypt ? s2 : s0) >> 24]);
+	return rx_xor_vec_i128(out, key);
+}
+
+template<bool soft>
+FORCE_INLINE rx_vec_i128 aesenc(rx_vec_i128 in, rx_vec_i128 key) {
+	return soft ? rxm_soft_aes_round<false>(in, key) : rx_aesenc_vec_i128(in, key);
+}
+
+template<bool soft>
+FORCE_INLINE rx_vec_i128 aesdec(rx_vec_i128 in, rx_vec_i128 key) {
+	return soft ? rxm_soft_aes_round<true>(in, key) : rx_aesdec_vec_i128(in, key);
+}
+#else
 template<bool soft>
 inline rx_vec_i128 aesenc(rx_vec_i128 in, rx_vec_i128 key) {
 	return soft ? soft_aesenc(in, key) : rx_aesenc_vec_i128(in, key);
@@ -50,3 +78,4 @@ template<bool soft>
 inline rx_vec_i128 aesdec(rx_vec_i128 in, rx_vec_i128 key) {
 	return soft ? soft_aesdec(in, key) : rx_aesdec_vec_i128(in, key);
 }
+#endif

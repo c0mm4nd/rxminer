@@ -63,9 +63,9 @@ static Timing measure(Hash hash, size_t inlen, size_t outlen) {
 }
 
 static void sample() {
-    // At most three input shapes, four paired samples each, with a shared 1 s
+    // At most three input shapes, four paired samples each, with a shared 500 ms
     // budget checked between batches. This measures preparation, never mining.
-    const auto deadline = Clock::now() + std::chrono::seconds(1);
+    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
     for (const auto& shape : {std::pair<size_t, size_t>{64, 64}, {256, 64}, {256, 32}}) {
         if (Clock::now() >= deadline) break;
         std::vector<double> compact, optimized;
