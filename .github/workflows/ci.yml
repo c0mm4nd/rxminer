@@ -43,7 +43,9 @@ jobs:
         run: cargo test --locked --release --lib -- --ignored --test-threads=1
       - name: Native correctness
         run: cargo test --locked --release --test tooling native_regressions -- --ignored --nocapture
-      - name: Portable native vectors and fused generation
+      - name: Native vectors and short preparation sample
+        env:
+          RXMINER_SHORT_BENCH: '1'
         run: cargo test --locked --release --test native_vectors -- --ignored --nocapture
       - name: Optional VAES build and native vectors
         if: matrix.rust == 'stable'
@@ -112,7 +114,9 @@ jobs:
         run: cargo test --locked -- --nocapture
       - name: JIT and secure JIT consensus
         run: cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
-      - name: Native vectors and fused generation
+      - name: Native vectors and short preparation sample
+        env:
+          RXMINER_SHORT_BENCH: '1'
         run: cargo test --locked --release --test native_vectors -- --ignored --nocapture
       - name: Full-memory shares and concurrent job switches
         run: |

@@ -182,7 +182,7 @@ int blake2b_init_key(blake2b_state *S, size_t outlen, const void *key, size_t ke
 static void blake2b_compress(blake2b_state *S, const uint8_t *block) {
 	uint64_t m[16];
 	uint64_t v[16];
-	unsigned int i, r;
+	unsigned int i;
 
 	for (i = 0; i < 16; ++i) {
 		m[i] = load64(block + i * sizeof(m[i]));
@@ -225,9 +225,17 @@ static void blake2b_compress(blake2b_state *S, const uint8_t *block) {
         G(r, 7, v[3], v[4], v[9], v[14]);                                      \
     } while ((void)0, 0)
 
-	for (r = 0; r < 12; ++r) {
+#if !defined(RXM_BLAKE2_COMPACT) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+	/* Constant message indices let the compiler eliminate the sigma lookups.
+	 * Keep the compact loop on architectures not covered by native CI tuning. */
+	ROUND(0); ROUND(1); ROUND(2); ROUND(3);
+	ROUND(4); ROUND(5); ROUND(6); ROUND(7);
+	ROUND(8); ROUND(9); ROUND(10); ROUND(11);
+#else
+	for (unsigned int r = 0; r < 12; ++r) {
 		ROUND(r);
 	}
+#endif
 
 	for (i = 0; i < 8; ++i) {
 		S->h[i] = S->h[i] ^ v[i] ^ v[i + 8];

@@ -7,7 +7,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 use support::{root, run, TempDir};
 
 #[test]
-#[ignore = "compiles and runs the native consensus and differential suites"]
+#[ignore = "compiles and runs the Unix x86 JIT execution differential"]
 fn native_regressions() -> Result<()> {
     let temp = TempDir::new("native-tests")?;
     let library = Path::new(env!("OUT_DIR")).join("librandomx.a");
@@ -29,35 +29,29 @@ fn native_regressions() -> Result<()> {
         .cargo_metadata(false)
         .out_dir(&temp.0)
         .get_compiler();
-    for name in [
-        "tests",
-        "jit_optimizations",
-        "program_generation",
-        "blake_fixed",
-    ] {
-        let binary = temp.0.join(name);
-        let mut command = compiler.to_command();
-        command
-            .args(["-std=c++11", "-O2", "-maes", "-DHAVE_POSIX_MEMALIGN", "-I"])
-            .arg(root().join("src/crypto/randomx"))
-            .arg(root().join(format!("tests/randomx/{name}.cpp")))
-            .arg(&library)
-            .args(["-pthread", "-lm", "-o"])
-            .arg(&binary);
-        run(&mut command, temp.0.join("compile.log"), 120)?;
-        let output = run(&mut Command::new(&binary), temp.0.join("native.log"), 180)?;
-        println!("{output}");
-        if name == "jit_optimizations" {
-            println!(
-                "{}",
-                run(
-                    Command::new(&binary).arg("--normalized"),
-                    temp.0.join("normalized.log"),
-                    180
-                )?
-            );
-        }
-    }
+    // Consensus, generation and BLAKE2b checks run in native_vectors on every platform.
+    let binary = temp.0.join("jit_optimizations");
+    let mut command = compiler.to_command();
+    command
+        .args(["-std=c++11", "-O2", "-maes", "-DHAVE_POSIX_MEMALIGN", "-I"])
+        .arg(root().join("src/crypto/randomx"))
+        .arg(root().join("tests/randomx/jit_optimizations.cpp"))
+        .arg(&library)
+        .args(["-pthread", "-lm", "-o"])
+        .arg(&binary);
+    run(&mut command, temp.0.join("compile.log"), 120)?;
+    println!(
+        "{}",
+        run(&mut Command::new(&binary), temp.0.join("native.log"), 180)?
+    );
+    println!(
+        "{}",
+        run(
+            Command::new(&binary).arg("--normalized"),
+            temp.0.join("normalized.log"),
+            180
+        )?
+    );
     Ok(())
 }
 
@@ -92,6 +86,8 @@ fn check_installed(binary: &Path, temp: &Path) -> Result<()> {
             "1",
             "--threads",
             "1",
+            "--randomx-mode",
+            "light",
             "--randomx-no-numa",
             flag,
         ]);
