@@ -3,6 +3,12 @@ name: RISC-V native regression
 # Queue once per completed batch of changes. RISE capacity is shared and scarce.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      package:
+        description: Build and validate a release archive after the full batch
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -115,3 +121,10 @@ jobs:
           printf '| Check | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
           jq -r 'to_entries[] | "| \(.key) | \(.value.outcome) |"' <<< "$STEP_RESULTS" >> "$GITHUB_STEP_SUMMARY"
           jq -e 'all(.[]; .outcome == "success")' <<< "$STEP_RESULTS"
+      - name: Production release binary
+        if: inputs.package
+        run: cargo build --release --locked
+      - uses: ./.github/actions/package
+        if: inputs.package
+        with:
+          platform: linux-riscv64

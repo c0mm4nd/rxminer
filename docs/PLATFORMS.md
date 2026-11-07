@@ -59,8 +59,28 @@ Unsupported explicit options fail validation. Huge-page requests retain their
 ordinary-page fallback when allocation is unavailable.
 
 GPU mining and other algorithms are not part of this port. Windows ARM64 has
-not been validated. See below for RISC-V validation. Release archives remain Linux x86-64 only;
-other platforms use Cargo installation.
+not been validated. See below for RISC-V validation.
+
+## Release archives
+
+Starting with v0.1.1, GitHub Actions builds Linux x86-64, ARM64 and RISC-V64,
+macOS Intel and Apple Silicon, and Windows x64 archives on their native runners.
+Each archive is extracted and checked for its version and a short offline mining
+run before upload. SHA-256 checksums accompany every archive.
+
+Linux packages are built on Ubuntu 24.04 and require a compatible glibc environment,
+OpenSSL 3 and the C++ runtime. macOS packages statically link OpenSSL and require
+macOS 15 or newer; they are ad-hoc signed, not Apple-notarized. Windows packages
+include the OpenSSL and Visual C++ runtime DLLs and target Windows 10/Server 2022
+or newer. Keep these DLLs beside `rxminer.exe` when moving the program.
+
+For TLS certificate verification on systems without an OpenSSL default CA bundle,
+provide `--tls-ca` or `SSL_CERT_FILE` pointing to your trusted CA bundle. Certificate
+fingerprint verification remains available with `--tls-fingerprint`.
+
+The normal Cargo build continues to use system OpenSSL and needs no additional
+packaging tools. RISC-V release validation is queued once after the other package
+jobs pass; the complete batch also produces the RISC-V archive.
 
 ## RISC-V bring-up
 

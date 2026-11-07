@@ -2,93 +2,140 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      riscv:
+        description: Include the queued RISC-V validation and package (tags always include it)
+        type: boolean
+        default: false
   push:
     tags:
-      - "v*"
+      - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  linux-x86_64:
-    runs-on: ubuntu-24.04
+  native:
+    name: Package ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-24.04
+            exe: ''
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+            exe: ''
+          - platform: macos-x86_64
+            os: macos-15-intel
+            exe: ''
+          - platform: macos-aarch64
+            os: macos-15
+            exe: ''
+          - platform: windows-x86_64
+            os: windows-2022
+            exe: '.exe'
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      RXMINER_ARCH: default
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Validate release version
-        env:
-          RELEASE_REF: ${{ github.ref }}
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+      - name: macOS static OpenSSL
+        if: runner.os == 'macOS'
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "rxminer") | .version')
-          test -n "$version"
-          if [[ "$RELEASE_REF" == refs/tags/* ]]; then
-            test "$RELEASE_TAG" = "v$version"
-          fi
-          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Install build dependencies
+          brew install openssl@3 pkg-config
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo 'OPENSSL_STATIC=1' >> "$GITHUB_ENV"
+      - name: Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev
-
-      - name: Rust checks and portable release build
+          $root = Join-Path $env:ProgramFiles 'OpenSSL'
+          $lib = Join-Path $root 'lib/VC/x64/MD'
+          foreach ($file in @("$root/include/openssl/ssl.h", "$lib/libssl.lib", "$lib/libcrypto.lib")) {
+            if (!(Test-Path $file)) { throw "Missing preinstalled OpenSSL file: $file" }
+          }
+          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OPENSSL_LIB_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          'OPENSSL_STATIC=0' | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root/bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Rust checks and production build
         run: |
           cargo fmt --check
-          cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
-          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
           cargo build --release --locked
-          cargo test --locked --release --lib -- --ignored --test-threads=1
-
-      - name: RandomX tests
+          cargo test --release --locked
+      - name: JIT and native hash vectors
         run: |
+          cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
           cargo test --locked --release --test native_vectors -- --ignored --nocapture
-          cargo test --locked --release --test tooling native_regressions -- --ignored --nocapture
-
-      - name: Local protocol regression tests
-        run: |
-          cargo test --locked --release --features test-dev-fee --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
-
-      - name: Smoke test
-        run: |
-          test "$(./target/release/rxminer --version)" = "rxminer $PACKAGE_VERSION"
-          ldd ./target/release/rxminer
-
-      - name: Cargo installation without Python, CMake, Make or Ninja
-        run: cargo test --locked --release --test tooling cargo_install_without_external_build_tools -- --ignored --nocapture
-
-      - name: Package
-        run: |
-          name="rxminer-v${PACKAGE_VERSION}-linux-x86_64"
-          mkdir -p "dist/$name"
-          cp target/release/rxminer README.md LICENSE Cargo.lock config.example.json "dist/$name/"
-          cp src/crypto/randomx/LICENSE "dist/$name/LICENSE-RandomX"
-          cp -r docs "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
-
-      - uses: actions/upload-artifact@v4
+      - name: Light and full-memory CLI smoke
+        timeout-minutes: 10
+        run: cargo test --locked --release --test portable -- --ignored --nocapture
+      - name: Local protocol and failover regression
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo test --locked --release --features test-dev-fee --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
+      - uses: ./.github/actions/package
         with:
-          name: rxminer-linux-x86_64
-          path: |
-            dist/*.tar.gz
-            dist/*.sha256
+          platform: ${{ matrix.platform }}
+          exe: ${{ matrix.exe }}
 
-      - name: Upload release draft
-        if: startsWith(github.ref, 'refs/tags/')
+  # Enqueue only after all ordinary packages pass; do not spend RISE capacity
+  # on every iteration of packaging changes. The reusable job runs one full batch.
+  riscv:
+    needs: native
+    if: startsWith(github.ref, 'refs/tags/') || inputs.riscv
+    uses: ./.github/workflows/riscv.yml
+    with:
+      package: true
+
+  draft:
+    needs: [native, riscv]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify all six packages and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          for platform in linux-x86_64 linux-aarch64 linux-riscv64 macos-x86_64 macos-aarch64 windows-x86_64; do
+            extension=tar.gz
+            if [[ "$platform" == windows-* ]]; then extension=zip; fi
+            name="rxminer-${RELEASE_TAG}-${platform}.${extension}"
+            test -s "$name"
+            sha256sum -c "$name.sha256"
+          done
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+      - name: Upload complete release draft
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256
+            dist/SHA256SUMS
