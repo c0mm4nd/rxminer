@@ -1,31 +1,64 @@
-# RxMiner
+<div align="center">
+
+# ⛏️ RxMiner
+
+**A fast, Rust-powered RandomX (`rx/0`) CPU miner for Monero-style pools.**
 
 [![CI](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml/badge.svg)](https://github.com/c0mm4nd/rxminer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg?logo=rust)](https://www.rust-lang.org)
+[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)](Cargo.toml)
+<br>
+![Linux](https://img.shields.io/badge/Linux-x86--64%20%7C%20ARM64-FCC624?logo=linux&logoColor=black)
+![macOS](https://img.shields.io/badge/macOS-Intel%20%7C%20Apple%20Silicon-000000?logo=apple&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-x64%20MSVC-0078D6?logo=windows&logoColor=white)
 
-A Rust CPU miner for Monero-style RandomX (`rx/0`) pools.
+[Installation](#-installation) •
+[Quick start](#-quick-start) •
+[Performance](#-performance-vs-xmrig) •
+[Configuration](#%EF%B8%8F-configuration) •
+[Documentation](#-documentation)
+
+</div>
+
+---
+
 RxMiner manages configuration, workers, networking and the control API in Rust,
 with an integrated RandomX C/C++ library for hashing and JIT execution.
 
-- Install directly with Cargo, without CMake, Make or Ninja.
-- CPU affinity, NUMA placement, full-memory and light modes, and huge-page support.
-- Stratum over TCP or TLS, pool failover, and HTTP CONNECT / SOCKS5 proxies.
-- JSON configuration, automatic reload, and an optional authenticated HTTP API.
-- Offline benchmarks and a built-in developer fee below 1%.
+## ✨ Features
 
-Runs on Linux (x86-64 and ARM64), macOS (Intel and Apple Silicon), and Windows
-x64 (MSVC). See [platform support](docs/PLATFORMS.md) for setup and system features,
-and [implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
+| | |
+| --- | --- |
+| 📦 **Cargo-only build** | Install directly with Cargo — no CMake, Make or Ninja required |
+| 🧠 **CPU & memory control** | CPU affinity, NUMA placement, full-memory and light modes, huge pages |
+| 🌐 **Robust networking** | Stratum over TCP or TLS, pool failover, HTTP CONNECT / SOCKS5 proxies |
+| 🔧 **Flexible configuration** | JSON config with automatic reload; CLI options override JSON |
+| 📡 **HTTP API** | Optional, authenticated, loopback-only and read-only by default |
+| 📊 **Offline benchmarks** | Measure hashrate without pool connections or fees |
+| 💸 **Low developer fee** | Built-in fee below 1% — see [details](#-developer-fee) |
+
+### Supported platforms
+
+| Platform | Architectures |
+| --- | --- |
+| 🐧 Linux | x86-64, ARM64 |
+| 🍎 macOS | Intel, Apple Silicon |
+| 🪟 Windows | x64 (MSVC) |
+
+See [platform support](docs/PLATFORMS.md) for setup and system features, and
+[implementation status](docs/CONFIGURATION.md#remaining-implementation-work)
 for remaining features.
 
-## Installation
+## 📥 Installation
 
 ### Requirements
 
-- Rust 1.88 or newer and Cargo.
-- A native C/C++ toolchain and OpenSSL development libraries;
-  see [platform dependencies](docs/PLATFORMS.md#dependencies).
+- **Rust 1.88** or newer, with Cargo
+- A native **C/C++ toolchain** and **OpenSSL** development libraries —
+  see [platform dependencies](docs/PLATFORMS.md#dependencies)
 
-On Debian or Ubuntu, install the native build dependencies with:
+On Debian or Ubuntu:
 
 ```bash
 sudo apt-get update
@@ -39,25 +72,24 @@ cargo install --git https://github.com/c0mm4nd/rxminer.git --locked --bin rxmine
 rxminer --version
 ```
 
-Cargo installs the binary to `~/.cargo/bin` by default. Ensure that directory
-is on your `PATH`. Re-run the install command to update, or add `--rev COMMIT`
-to install a specific revision.
+Cargo installs the binary to `~/.cargo/bin` by default; make sure that
+directory is on your `PATH`. Re-run the command to update, or add
+`--rev COMMIT` to install a specific revision.
 
 ### From a local checkout
-
-Run from the repository root:
 
 ```bash
 cargo install --path . --locked --bin rxminer
 ```
 
-Both methods build RandomX automatically through Cargo. OpenSSL and the C++
-runtime remain system dependencies. Installation from crates.io is not yet
-supported.
+> [!NOTE]
+> Both methods build RandomX automatically through Cargo. OpenSSL and the C++
+> runtime remain system dependencies. Installation from crates.io is not yet
+> supported.
 
-## Quick start
+## 🚀 Quick start
 
-### Connect to a pool
+### 1. Connect to a pool
 
 Replace the example pool and wallet with your own values:
 
@@ -66,47 +98,58 @@ rxminer -o stratum+ssl://pool.example.com:443 \
   -u YOUR_WALLET_ADDRESS -p x --tls-verify
 ```
 
-`--tls-verify` enables certificate verification using the system CA store.
-TLS alone does not enable certificate verification by default. For private
-CAs, certificate pins and proxies, see the
-[networking reference](docs/CONFIGURATION.md#pools-and-networking).
+> [!IMPORTANT]
+> TLS alone does **not** verify certificates. `--tls-verify` enables
+> verification against the system CA store. For private CAs, certificate pins
+> and proxies, see the [networking reference](docs/CONFIGURATION.md#pools-and-networking).
 
-### Use a configuration file
+### 2. Use a configuration file
 
-Copy [config.example.json](config.example.json), then edit the pool URL and
-wallet before starting:
+Copy [`config.example.json`](config.example.json), then edit the pool URL and
+wallet:
 
 ```bash
 cp config.example.json config.json
-rxminer -c config.json --tls-verify --dry-run
-rxminer -c config.json --tls-verify
+rxminer -c config.json --tls-verify --dry-run   # validate only
+rxminer -c config.json --tls-verify             # start mining
 ```
 
-CLI options override JSON values. `--dry-run` validates configuration and CPU
-selection without connecting to pools or allocating datasets. Configuration
-file watching is enabled by default.
+`--dry-run` validates configuration and CPU selection without connecting to
+pools or allocating datasets. Configuration file watching is enabled by default.
 
-### Run a local benchmark
+### 3. Run a local benchmark
 
 ```bash
 rxminer --benchmark-seconds 60
 ```
 
-Benchmarks run without pool connections or developer fees. Full-memory
-initialization needs roughly 2.3 GiB per dataset, plus worker scratchpads and
-runtime overhead. For memory-constrained environments, use
-`--randomx-mode light`; this reduces memory use at the cost of hashing speed.
+Benchmarks run without pool connections or developer fees.
 
-## Performance vs XMRig
+> [!TIP]
+> Full-memory mode needs roughly **2.3 GiB per dataset**, plus worker
+> scratchpads and runtime overhead. On memory-constrained machines, use
+> `--randomx-mode light` — it reduces memory use at the cost of hashing speed.
 
-RxMiner recorded higher throughput than XMRig in the historical tests below.
-These results compare **RxMiner Rust 0.5.0** with **XMRig 6.26.0**, measured on
-November 4, 2026, with matching requested settings within each comparison.
-Hardware and configuration details are omitted here.
+## 📈 Performance vs XMRig
 
-The table includes all 19 higher-throughput results from 32 completed screening
-comparisons, followed by two longer paired comparisons. Rates are in **kH/s**;
-the longer comparisons report the mean of two runs per miner.
+In historical tests comparing **RxMiner 0.5.0** with **XMRig 6.26.0**
+(November 4, 2026, matching requested settings within each comparison),
+RxMiner recorded higher throughput in 19 of 32 screening comparisons and in
+both longer paired comparisons:
+
+| Longer comparison | RxMiner | XMRig | RxMiner lead |
+| --- | ---: | ---: | ---: |
+| A | **38.55** kH/s | 33.76 kH/s | **+14.20%** |
+| B | **46.89** kH/s | 39.80 kH/s | **+17.80%** |
+
+The longer comparisons report the mean of two runs per miner.
+
+<details>
+<summary><b>Show all 19 higher-throughput screening results</b></summary>
+
+<br>
+
+Rates are in **kH/s**.
 
 | Test | RxMiner | XMRig | RxMiner lead |
 | --- | ---: | ---: | ---: |
@@ -129,39 +172,44 @@ the longer comparisons report the mean of two runs per miner.
 | Screening 17 | 39.07 | 35.59 | +9.75% |
 | Screening 18 | 44.46 | 40.22 | +10.54% |
 | Screening 19 | 45.09 | 41.89 | +7.64% |
-| Longer comparison A | 38.55 | 33.76 | +14.20% |
-| Longer comparison B | 46.89 | 39.80 | +17.80% |
 
-Percentages use unrounded measurements. These are selected historical results,
-not a new benchmark of the current revision. Shared-host variation affected
-measurements; small leads do not establish a repeatable advantage, and RxMiner
-did not lead in every tested configuration.
+</details>
 
-## Configuration
+> [!NOTE]
+> Percentages use unrounded measurements. These are selected historical
+> results, not a benchmark of the current revision; hardware and configuration
+> details are omitted. Shared-host variation affected measurements, small leads
+> do not establish a repeatable advantage, and RxMiner did not lead in every
+> tested configuration. Measure on your own hardware with `--benchmark-seconds`.
+
+## ⚙️ Configuration
 
 Run `rxminer --help` for CLI options, or see the
 [configuration reference](docs/CONFIGURATION.md) for all supported settings.
 
 | Area | Common settings | Reference |
 | --- | --- | --- |
-| Pools | URL, wallet, TLS, proxies, failover | [Networking](docs/CONFIGURATION.md#pools-and-networking) |
-| CPU and memory | Threads, affinity, NUMA, huge pages, memory mode | [CPU and memory](docs/CONFIGURATION.md#cpu-and-memory) |
-| CPU tuning | Optional MSR settings and restoration | [MSRs](docs/CONFIGURATION.md#msrs) |
-| Runtime | Configuration reload, logging, background mode | [Runtime and output](docs/CONFIGURATION.md#runtime-and-output) |
-| HTTP API | Status, authentication, TLS, pause/resume, configuration updates | [HTTP API](docs/CONFIGURATION.md#http-api) |
-| Benchmarks | Duration, hash count, seed, checksum | [Offline benchmarks](docs/CONFIGURATION.md#offline-benchmarks) |
+| 🌐 Pools | URL, wallet, TLS, proxies, failover | [Networking](docs/CONFIGURATION.md#pools-and-networking) |
+| 🧠 CPU and memory | Threads, affinity, NUMA, huge pages, memory mode | [CPU and memory](docs/CONFIGURATION.md#cpu-and-memory) |
+| 🔩 CPU tuning | Optional MSR settings and restoration | [MSRs](docs/CONFIGURATION.md#msrs) |
+| 🔄 Runtime | Configuration reload, logging, background mode | [Runtime and output](docs/CONFIGURATION.md#runtime-and-output) |
+| 📡 HTTP API | Status, authentication, TLS, pause/resume, configuration updates | [HTTP API](docs/CONFIGURATION.md#http-api) |
+| 📊 Benchmarks | Duration, hash count, seed, checksum | [Offline benchmarks](docs/CONFIGURATION.md#offline-benchmarks) |
 
-On Linux, automatic worker selection respects CPU affinity and cgroup CPU quotas.
-Reserved 2 MiB huge pages are requested by default, with fallback when
-unavailable; RxMiner does not reserve system pages. MSR writes are opt-in and
-restored on exit by default. See the
-[performance guide](docs/OPTIMIZATION.md) for tuning and measurement.
+**Sensible defaults:**
 
-The HTTP API is disabled by default. Enable it with `--http-port PORT`; it
-binds to loopback and starts in read-only mode. Control operations require an
-access token and `http.restricted: false`.
+- **Workers** — on Linux, automatic worker selection respects CPU affinity and
+  cgroup CPU quotas.
+- **Huge pages** — reserved 2 MiB huge pages are requested by default, with
+  fallback when unavailable; RxMiner does not reserve system pages.
+- **MSRs** — writes are opt-in and restored on exit by default.
+- **HTTP API** — disabled by default. Enable it with `--http-port PORT`; it
+  binds to loopback and starts in read-only mode. Control operations require
+  an access token and `http.restricted: false`.
 
-## Developer fee
+See the [performance guide](docs/OPTIMIZATION.md) for tuning and measurement.
+
+## 💸 Developer fee
 
 RxMiner selects a process-wide developer fee uniformly from `[0, 1)` percent.
 Each 600-second cycle starts with the developer window, followed by user
@@ -172,14 +220,17 @@ RandomX seed as user work. A developer connection failure stops mining while
 reconnecting or switching to a backup pool; without a backup, the process
 exits with an error. A seed mismatch is fatal. Offline benchmarks have no fee.
 
-## Documentation
+## 📚 Documentation
 
-- [Platform support and dependencies](docs/PLATFORMS.md)
-- [Configuration reference](docs/CONFIGURATION.md)
-- [Performance and validation](docs/OPTIMIZATION.md)
-- [RandomX support and source attribution](docs/RANDOMX.md)
+| Document | Contents |
+| --- | --- |
+| [Platform support](docs/PLATFORMS.md) | Supported targets, dependencies, OS-specific features |
+| [Configuration reference](docs/CONFIGURATION.md) | Every CLI flag and JSON option |
+| [Performance and validation](docs/OPTIMIZATION.md) | Builds, tuning and measurement |
+| [Development](docs/DEVELOPMENT.md) | Building from source and running the test suites |
+| [RandomX](docs/RANDOMX.md) | RandomX support and source attribution |
 
-## License
+## 📄 License
 
 RxMiner is licensed under the [MIT License](LICENSE). The integrated RandomX
 library is licensed under [BSD 3-Clause](src/crypto/randomx/LICENSE).
