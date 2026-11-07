@@ -87,26 +87,36 @@ static void sample(bool hardware) {
     const auto deadline = Clock::now() + std::chrono::milliseconds(500);
     for (bool soft : {true, false}) {
         if ((!soft && !hardware) || Clock::now() >= deadline) break;
-        Buffer legacy(2097152), current(2097152);
-        std::memset(legacy.data, 0, 2097152);
-        std::memset(current.data, 0, 2097152);
-        alignas(64) unsigned char oldHash[64], newHash[64], oldState[64] = {}, newState[64] = {};
+        Buffer input(2097152), working(2097152), expected(2097152);
+        std::memset(input.data, 0, 2097152);
+        alignas(64) unsigned char oldHash[64], newHash[64], oldState[64], newState[64];
         const auto before = soft ? rxm_legacy_hashAndFillAes1Rx4<true> : rxm_legacy_hashAndFillAes1Rx4<false>;
         const auto after = soft ? hashAndFillAes1Rx4<true> : hashAndFillAes1Rx4<false>;
         std::vector<double> oldTimes, newTimes;
         // Warmup plus four alternating pairs; compare the complete state outside timing.
         for (unsigned pair = 0; pair < 5 && Clock::now() < deadline; ++pair) {
+            std::memset(oldState, 0, 64);
+            std::memset(newState, 0, 64);
+            input.data[0] = static_cast<unsigned char>(pair);
+            // Both paths use the same address and identical copy-in warmup.
+            // Separate buffers can bias results on CPUs with small/shared caches.
+            const auto run = [&](Pipeline pipeline, unsigned char* hash, unsigned char* state) {
+                std::memcpy(working.data, input.data, 2097152);
+                return measure(pipeline, working, hash, state);
+            };
             double a, b;
             if (pair % 2) {
-                b = measure(after, current, newHash, newState);
-                a = measure(before, legacy, oldHash, oldState);
+                b = run(after, newHash, newState);
+                std::memcpy(expected.data, working.data, 2097152);
+                a = run(before, oldHash, oldState);
             } else {
-                a = measure(before, legacy, oldHash, oldState);
-                b = measure(after, current, newHash, newState);
+                a = run(before, oldHash, oldState);
+                std::memcpy(expected.data, working.data, 2097152);
+                b = run(after, newHash, newState);
             }
             require(std::memcmp(oldHash, newHash, 64) == 0);
             require(std::memcmp(oldState, newState, 64) == 0);
-            require(std::memcmp(legacy.data, current.data, 2097152) == 0);
+            require(std::memcmp(expected.data, working.data, 2097152) == 0);
             if (pair) { oldTimes.push_back(a); newTimes.push_back(b); }
         }
         if (oldTimes.empty()) continue;

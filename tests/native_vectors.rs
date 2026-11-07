@@ -186,7 +186,7 @@ fn write_aes_summary(output: &str) -> Result<()> {
     }
     if !rows.is_empty() {
         let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
-        writeln!(summary, "### AES scratchpad hash/refill: short sample\n\nOne 2 MiB scratchpad per call; same compiler and optimization level, alternating old/current paths. Complete scratchpad, hash and generator state compared outside timing. Median milliseconds per call; ratio = legacy / current. Sampling budget: 500 ms, checked between pairs. BLAKE2b and AES together budget 1 second plus the final bounded batch. These are kernel timings, not mining hashrate; performance does not gate correctness.\n\n| AES mode | Sample pairs | Legacy ms | Current ms | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
+        writeln!(summary, "### AES scratchpad hash/refill: short sample\n\nOne 2 MiB scratchpad per call; same address and copy-in warmup for both paths, same compiler and optimization level, alternating old/current order. Complete scratchpad, hash and generator state compared outside timing. Median milliseconds per call; ratio = legacy / current. Sampling budget: 500 ms, checked between pairs. BLAKE2b and AES together budget 1 second plus the final bounded batch. These are kernel timings, not mining hashrate; performance does not gate correctness.\n\n| AES mode | Sample pairs | Legacy ms | Current ms | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
     }
     Ok(())
 }

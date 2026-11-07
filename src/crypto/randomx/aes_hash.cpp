@@ -323,10 +323,11 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 	scratchpadEnd -= PREFETCH_DISTANCE;
 
 	for (int i = 0; i < 2; ++i) {
-#if !defined(RXM_AES_LEGACY) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
-		// XMRig's hardware-AES schedule: consume two original blocks before
+#if !defined(RXM_AES_LEGACY) && (defined(__x86_64__) || defined(_M_X64))
+		// XMRig's x86 hardware-AES schedule: consume two original blocks before
 		// refilling either. Explicit batching also applies to MSVC, which does
-		// not use the GCC loop-unrolling hint below. Retain a single-block tail.
+		// not use the GCC loop-unrolling hint below. Retain a single-block tail;
+		// ARM64 keeps its interleaved schedule, avoiding a native CI regression.
 		if (!softAes) {
 			while (scratchpadEnd - scratchpadPtr >= 128) {
 				for (unsigned block = 0; block < 2; ++block) {
