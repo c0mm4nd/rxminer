@@ -1,6 +1,8 @@
 name: Rust and native regression
 on:
   push:
+    branches:
+      - '**'
   pull_request:
   workflow_dispatch:
 permissions:
