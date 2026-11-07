@@ -161,6 +161,15 @@ fn main() {
                     .compile_intermediates(),
             );
         }
+        "riscv64" => {
+            cpp.file(source.join("jit_compiler_rv64.cpp"));
+            objects.extend(
+                common
+                    .clone()
+                    .file(source.join("jit_compiler_rv64_static.S"))
+                    .compile_intermediates(),
+            );
+        }
         _ => (), // The upstream interpreter remains available without a JIT backend.
     }
     cpp.cpp(true)

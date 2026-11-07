@@ -54,35 +54,37 @@ require Linux. Nondefault JIT prefetch modes require the Unix x86-64 backend.
 Unsupported explicit options fail validation. Huge-page requests retain their
 ordinary-page fallback when allocation is unavailable.
 
-GPU mining and other algorithms are not part of this port. RISC-V and Windows
-ARM64 have not been validated. Release archives remain Linux x86-64 only;
+GPU mining and other algorithms are not part of this port. Windows ARM64 has
+not been validated. See below for RISC-V validation. Release archives remain Linux x86-64 only;
 other platforms use Cargo installation.
 
 ## RISC-V bring-up
 
-The separate [RISC-V native baseline workflow](../.github/workflows/riscv.yml)
-is ready for manual dispatch through RISE's `ubuntu-24.04-riscv` runner.
-Native execution has not yet been verified. The current backend is the portable
-interpreter; RV64 JIT and vector/crypto acceleration are not integrated.
+The separate [RISC-V native regression workflow](../.github/workflows/riscv.yml)
+uses RISE's `ubuntu-24.04-riscv` runner. The initial interpreter baseline passed
+[native compilation, known hashes, CLI configuration, Cargo installation and light-mode mining](https://github.com/c0mm4nd/rxminer/actions/runs/42351301309).
+The scalar RV64GC JIT and compiled dataset initializer are now integrated;
+native JIT validation is pending. Vector/crypto acceleration is not integrated.
 
 For a personal repository, install the
 [RISE personal-account GitHub App](https://github.com/apps/rise-risc-v-runners-personal)
 and grant access only to the intended repository. The service requires repository
 Administration read/write to register ephemeral runners, plus Metadata read;
 see the [provider's installation guide](https://riscv-runners.riseproject.dev/docs/getting-started/install.html).
-Once installed, open Actions, select **RISC-V native baseline**, and use
+Once installed, open Actions, select **RISC-V native regression**, and use
 **Run workflow** on `main`. A maintainer can also run:
 
 ```bash
 gh workflow run riscv.yml --ref main
 ```
 
-This initial job checks native compilation, a known RandomX hash, pipelined
-hashing, CLI configuration, Cargo installation and positive offline light-mode
-hash counts. It uses no pool connection. JIT, full datasets, performance and
-instruction-extension coverage remain separate follow-up work. Automatic runs
-will be enabled after native validation; the existing platform matrix stays
-independent of this experimental runner.
+The workflow checks native compilation, a known RandomX hash, pipelined hashing,
+concurrent interpreter/JIT/secure-JIT agreement, shared-cache VM recreation,
+full-dataset/light-mode agreement, CLI configuration, Cargo installation and
+positive offline light-mode hash counts. It uses no pool connection. Relevant
+pushes to `main` and pull requests trigger it automatically; manual dispatch
+remains available. The existing platform matrix stays independent of the RISE
+runner. Performance and instruction-extension coverage require further testing.
 
 ## Validation
 

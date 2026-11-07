@@ -1,8 +1,12 @@
-name: RISC-V native baseline
+name: RISC-V native regression
 
-# Enable automatic runs after the first native validation.
-# Install the RISE personal-account app for this repository before dispatching.
+# RISE provides ephemeral native runners for this repository.
 on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'tests/**', 'Cargo.*', 'build.rs', '.github/workflows/riscv.yml']
+  pull_request:
+    paths: ['src/**', 'tests/**', 'Cargo.*', 'build.rs', '.github/workflows/riscv.yml']
   workflow_dispatch:
 
 permissions:
@@ -14,7 +18,7 @@ concurrency:
 
 jobs:
   riscv64:
-    name: Linux RISC-V64 interpreter baseline
+    name: Linux RISC-V64 JIT and interpreter
     runs-on: ubuntu-24.04-riscv
     timeout-minutes: 120
     defaults:
@@ -50,6 +54,14 @@ jobs:
       - name: CLI and configuration
         timeout-minutes: 15
         run: cargo test --locked --release --test portable cli_version_and_configuration -- --exact --nocapture
+      - name: Concurrent JIT and secure JIT consensus
+        timeout-minutes: 20
+        run: |
+          cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
+          cargo test --locked --release --lib shared_light_cache_and_native_tuning_preserve_consensus -- --nocapture
+      - name: Full dataset agrees with light-mode hashing
+        timeout-minutes: 20
+        run: cargo test --locked --release --lib full_dataset_prefetch_modes_match_light_hashes -- --ignored --nocapture
       - name: Cargo installation and offline light-mode hashing
         timeout-minutes: 20
         run: |

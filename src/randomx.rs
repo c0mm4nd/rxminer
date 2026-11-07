@@ -594,7 +594,7 @@ mod tests {
             let cache = Arc::new(Cache::new(seed).unwrap());
             let make_vm = |extra| {
                 // SAFETY: initialized shared cache; each light VM is owned by
-                // this test thread and keeps its own Arc to the cache.
+                // its worker thread and keeps its own Arc to the cache.
                 let ptr = unsafe {
                     randomx_create_vm(
                         flags() & HARD_AES | extra,
@@ -611,33 +611,49 @@ mod tests {
                     pending: false,
                 }
             };
-            let mut interpreter = make_vm(0);
-            let mut jit = make_vm(JIT);
-            let mut secure_jit = make_vm(JIT | 16); // RANDOMX_FLAG_SECURE: W^X
-            for index in 0..16u32 {
-                let mut blob = [0u8; 76];
-                for (position, byte) in blob.iter_mut().enumerate() {
-                    *byte = (index.wrapping_mul(131) ^ (position as u32).wrapping_mul(73)) as u8;
-                }
-                blob[39..43].copy_from_slice(&index.to_le_bytes());
-                let mut hashes = [[0; 32]; 3];
-                for (vm, hash) in [&mut interpreter, &mut jit, &mut secure_jit]
+            // Generate and execute programs concurrently against one immutable cache.
+            // VMs never cross thread boundaries; instruction-cache synchronization
+            // must also remain correct when the OS migrates a worker between CPUs.
+            let hashes = thread::scope(|scope| {
+                let workers: Vec<_> = [0, JIT, JIT | SECURE]
                     .into_iter()
-                    .zip(&mut hashes)
-                {
-                    // SAFETY: exclusive VM, valid input and 32-byte output.
-                    unsafe {
-                        randomx_calculate_hash(
-                            vm.ptr.as_ptr(),
-                            blob.as_ptr().cast(),
-                            blob.len(),
-                            hash.as_mut_ptr().cast(),
-                        );
-                    }
-                }
-                assert_eq!(hashes[0], hashes[1], "JIT mismatch at input {index}");
-                assert_eq!(hashes[0], hashes[2], "secure JIT mismatch at input {index}");
-            }
+                    .map(|extra| {
+                        let make_vm = &make_vm;
+                        scope.spawn(move || {
+                            let vm = make_vm(extra);
+                            (0..16u32)
+                                .map(|index| {
+                                    let mut blob = [0u8; 76];
+                                    for (position, byte) in blob.iter_mut().enumerate() {
+                                        *byte = (index.wrapping_mul(131)
+                                            ^ (position as u32).wrapping_mul(73))
+                                            as u8;
+                                    }
+                                    blob[39..43].copy_from_slice(&index.to_le_bytes());
+                                    let mut hash = [0; 32];
+                                    // SAFETY: exclusive VM, valid input and 32-byte output.
+                                    unsafe {
+                                        randomx_calculate_hash(
+                                            vm.ptr.as_ptr(),
+                                            blob.as_ptr().cast(),
+                                            blob.len(),
+                                            hash.as_mut_ptr().cast(),
+                                        );
+                                    }
+                                    thread::yield_now();
+                                    hash
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(hashes[0], hashes[1], "JIT mismatch");
+            assert_eq!(hashes[0], hashes[2], "secure JIT mismatch");
         }
     }
 

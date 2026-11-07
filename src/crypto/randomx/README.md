@@ -20,7 +20,7 @@ regression coverage when applying updates.
 
 Cargo compiles these sources directly through `build.rs`. The source package
 includes the implementation and license. Regression tests live in
-`tests/randomx/`; upstream examples and analysis tools are omitted. Windows x64 and ARM64
+`tests/randomx/`; upstream examples and analysis tools are omitted. Windows x64, ARM64 and RV64
 backends are restored from the same pinned upstream commit. The optional native developer build is configured by
 `cmake/randomx.cmake`. Run validation commands from the repository root.
 
@@ -28,6 +28,10 @@ Windows uses the upstream x64 JIT and ABI-specific assembly. Unix x86-64 keeps
 the local optimized JIT. ARM64 uses the upstream JIT with a dedicated executable
 allocator; Apple Silicon requires per-thread write/execute protection. The
 portable interpreter remains the fallback for architectures without a backend.
+RV64 uses the upstream scalar JIT and dataset initializer with the RV64GC
+instruction baseline. Vector dispatch and signal-based instruction probing are
+omitted; no vector or crypto extension is required. Generated code retains
+instruction-cache synchronization, and each VM owns its code and literal buffers.
 
 ## Local changes
 

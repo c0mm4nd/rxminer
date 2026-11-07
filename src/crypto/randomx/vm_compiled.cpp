@@ -75,8 +75,8 @@ namespace randomx {
 
 	template<class Allocator, bool softAes, bool secureJit>
 	void CompiledVm<Allocator, softAes, secureJit>::execute() {
-#if defined(RANDOMX_COMPILER_A64)
-		// ARM64 loads exponent masks from the register file before execution.
+#if defined(RANDOMX_COMPILER_A64) || defined(RANDOMX_COMPILER_RV64)
+		// These backends load exponent masks from the register file before execution.
 		memcpy(reg.f, config.eMask, sizeof(config.eMask));
 #endif
 		compiler.getProgramFunc()(reg, mem, scratchpad, RANDOMX_PROGRAM_ITERATIONS);
