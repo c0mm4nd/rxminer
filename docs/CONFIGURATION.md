@@ -161,8 +161,8 @@ options are removed, with no calls to an external benchmark service.
 
 These features are still unavailable and must not be treated as implemented:
 
-- GPU backends, RISC-V and Windows ARM64 validation, and algorithms other than `rx/0`.
-- Non-Linux NUMA placement and physical-core discovery; see [platform support](PLATFORMS.md).
+- GPU backends, Windows ARM64 validation, and algorithms other than `rx/0`.
+- Non-Linux NUMA placement and Windows multi-group CPU discovery; see [platform support](PLATFORMS.md).
 - Daemon RPC mining and self-select/origin submission.
 - Cache QoS, named assembly kernels, and SSE2/XOP/AVX-512 Argon2 kernels.
 - AVX2 dataset initialization (`randomx.init-avx2: 1`); selecting an AVX2 Argon2

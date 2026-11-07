@@ -81,8 +81,10 @@ void rxm_fillAes1Rx4_vaes(void *state, size_t outputSize, void *buffer) {
     _mm_store_si128((__m128i *) state + 3, hi128(s13));
 }
 
-void rxm_fillAes4Rx4_vaes(void *state, size_t outputSize, void *buffer) {
+template<bool normalized>
+static void fillAes4Rx4Impl(void *state, size_t outputSize, void *buffer) {
     assert(outputSize % 64 == 0);
+    assert(!normalized || outputSize >= 128);
     uint8_t *out = (uint8_t *) buffer;
     uint8_t *end = out + outputSize;
 
@@ -96,22 +98,40 @@ void rxm_fillAes4Rx4_vaes(void *state, size_t outputSize, void *buffer) {
     __m256i s13 = pair(_mm_load_si128((const __m128i *) state + 1),
                        _mm_load_si128((const __m128i *) state + 3));
 
-    while (out < end) {
-        s02 = _mm256_aesdec_epi128(s02, k04);
-        s13 = _mm256_aesenc_epi128(s13, k04);
-        s02 = _mm256_aesdec_epi128(s02, k15);
-        s13 = _mm256_aesenc_epi128(s13, k15);
-        s02 = _mm256_aesdec_epi128(s02, k26);
-        s13 = _mm256_aesenc_epi128(s13, k26);
-        s02 = _mm256_aesdec_epi128(s02, k37);
-        s13 = _mm256_aesenc_epi128(s13, k37);
+    for (unsigned phase = 0; phase < (normalized ? 2u : 1u); ++phase) {
+        uint8_t* phaseEnd = normalized && phase == 0 ? (uint8_t*)buffer + 128 : end;
+        const __m128i mask = phase == 0
+            ? v128(-1, -1, -1, -1)
+            : v128(-1, 0xff0707ff, -1, 0xff0707ff);
+        const __m256i outputMask = pair(mask, mask);
+        while (out < phaseEnd) {
+            s02 = _mm256_aesdec_epi128(s02, k04);
+            s13 = _mm256_aesenc_epi128(s13, k04);
+            s02 = _mm256_aesdec_epi128(s02, k15);
+            s13 = _mm256_aesenc_epi128(s13, k15);
+            s02 = _mm256_aesdec_epi128(s02, k26);
+            s13 = _mm256_aesenc_epi128(s13, k26);
+            s02 = _mm256_aesdec_epi128(s02, k37);
+            s13 = _mm256_aesenc_epi128(s13, k37);
 
-        _mm_store_si128((__m128i *) out + 0, lo128(s02));
-        _mm_store_si128((__m128i *) out + 1, lo128(s13));
-        _mm_store_si128((__m128i *) out + 2, hi128(s02));
-        _mm_store_si128((__m128i *) out + 3, hi128(s13));
-        out += 64;
+            // Mask stores only: the unmodified AES states feed the next block.
+            const __m256i out02 = normalized ? _mm256_and_si256(s02, outputMask) : s02;
+            const __m256i out13 = normalized ? _mm256_and_si256(s13, outputMask) : s13;
+            _mm_store_si128((__m128i *) out + 0, lo128(out02));
+            _mm_store_si128((__m128i *) out + 1, lo128(out13));
+            _mm_store_si128((__m128i *) out + 2, hi128(out02));
+            _mm_store_si128((__m128i *) out + 3, hi128(out13));
+            out += 64;
+        }
     }
+}
+
+void rxm_fillAes4Rx4_vaes(void *state, size_t outputSize, void *buffer) {
+    fillAes4Rx4Impl<false>(state, outputSize, buffer);
+}
+
+void rxm_fillAes4Rx4Program_vaes(void *state, size_t outputSize, void *buffer) {
+    fillAes4Rx4Impl<true>(state, outputSize, buffer);
 }
 
 void rxm_hashAndFillAes1Rx4_vaes(void *scratchpad, size_t scratchpadSize,

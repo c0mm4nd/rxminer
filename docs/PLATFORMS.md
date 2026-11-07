@@ -6,10 +6,11 @@ OS-specific tuning differences are listed separately.
 | Target | Hash backend | Verified runner |
 | --- | --- | --- |
 | Linux x86-64 | Optimized x86-64 JIT | Ubuntu 22.04 and 24.04 |
-| Linux ARM64 | Upstream ARM64 JIT | Ubuntu 24.04 ARM64 |
+| Linux ARM64 | ARM64 JIT | Ubuntu 24.04 ARM64 |
 | macOS Intel | Optimized x86-64 JIT | macOS 15 Intel |
 | macOS Apple Silicon | ARM64 JIT with write/execute protection | macOS 15 ARM64 |
-| Windows x64 (MSVC) | Upstream Windows x64 JIT | Windows Server 2022 |
+| Windows x64 (MSVC) | Windows x64 JIT | Windows Server 2022 |
+| Linux RISC-V64 | RV64GC JIT | Ubuntu 24.04 RISE |
 
 All targets build RandomX directly through Cargo. No submodule checkout,
 build-time source download, CMake, Make, Ninja or Python is used by the miner
@@ -66,8 +67,10 @@ other platforms use Cargo installation.
 The separate [RISC-V native regression workflow](../.github/workflows/riscv.yml)
 uses RISE's `ubuntu-24.04-riscv` runner. The initial interpreter baseline passed
 [native compilation, known hashes, CLI configuration, Cargo installation and light-mode mining](https://github.com/c0mm4nd/rxminer/actions/runs/42351301309).
-The scalar RV64GC JIT and compiled dataset initializer are now integrated;
-native JIT validation is pending. Vector/crypto acceleration is not integrated.
+The scalar RV64GC JIT and compiled dataset initializer passed the
+[complete native validation batch](https://github.com/c0mm4nd/rxminer/actions/runs/42358525166),
+including secure JIT, full-memory mining, concurrent worker lifecycle checks and
+Cargo installation. Vector/crypto acceleration is not integrated.
 
 For a personal repository, install the
 [RISE personal-account GitHub App](https://github.com/apps/rise-risc-v-runners-personal)
@@ -95,12 +98,15 @@ instruction-extension coverage require further testing.
 
 ## Validation
 
-The five verified platform targets above run Rust checks, known hash vectors, JIT/interpreter
+The verified platform targets above run Rust checks, known hash vectors, JIT/interpreter
 agreement, full-memory and light-mode mining, and local Cargo installation.
 Full-memory shares are checked against the light interpreter across concurrent
 job updates, developer-fee switches and seed changes. Worker startup failures
 and panics must stop the other workers and clear shared state.
-The existing Linux x86-64 jobs additionally run the native differential suite,
+Native checks compare full-capacity and active-length AES program generation,
+including seed preservation and untouched buffer tails. On x86-64 and ARM64,
+they also compare machine code from raw and fused-normalized programs across
+v1/v2 and memory-mode switches. The Linux x86-64 jobs additionally run the native differential suite,
 local pool/proxy/runtime regressions and fresh Git-install checks.
 
 The initial port passed all six jobs in the

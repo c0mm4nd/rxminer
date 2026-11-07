@@ -1,4 +1,3 @@
-#![cfg(target_os = "linux")]
 //! Portable native consensus vectors, linked to the archive built by Cargo.
 mod support;
 use anyhow::{ensure, Context, Result};
@@ -9,7 +8,11 @@ use support::{root, run, TempDir};
 #[ignore = "runs the native vector suite, including interpreter and JIT paths"]
 fn native_vectors() -> Result<()> {
     let temp = TempDir::new("native-vectors")?;
-    let library = Path::new(env!("OUT_DIR")).join("librandomx.a");
+    let library = Path::new(env!("OUT_DIR")).join(if cfg!(target_env = "msvc") {
+        "randomx.lib"
+    } else {
+        "librandomx.a"
+    });
     ensure!(library.is_file(), "Cargo-built RandomX archive missing");
     let version = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
         .arg("-vV")
@@ -29,26 +32,50 @@ fn native_vectors() -> Result<()> {
         .cargo_metadata(false)
         .out_dir(&temp.0)
         .get_compiler();
-    let binary = temp.0.join("native-vectors");
-    let mut command = compiler.to_command();
-    command
-        .args(["-std=c++11", "-O2", "-DHAVE_POSIX_MEMALIGN", "-I"])
-        .arg(root().join("src/crypto/randomx"));
-    if cfg!(target_arch = "x86_64") {
-        command.arg("-maes");
+    for source in ["tests", "program_generation", "jit_normalization"] {
+        let binary = temp
+            .0
+            .join(format!("{source}{}", std::env::consts::EXE_SUFFIX));
+        let mut command = compiler.to_command();
+        // Keep compiler side products out of the checkout on Windows.
+        command.current_dir(&temp.0);
+        if compiler.is_like_msvc() {
+            command.args(["/std:c++14", "/O2", "/EHsc", "/D__AES__", "/I"]);
+        } else {
+            command.args(["-std=c++11", "-O2", "-DHAVE_POSIX_MEMALIGN", "-I"]);
+        }
+        command.arg(root().join("src/crypto/randomx"));
+        if !compiler.is_like_msvc() {
+            if cfg!(target_arch = "x86_64") {
+                command.arg("-maes");
+            }
+            if cfg!(target_arch = "aarch64") {
+                command.arg("-march=armv8-a+crypto");
+            }
+        }
+        command
+            .arg(root().join(format!("tests/randomx/{source}.cpp")))
+            .arg(&library);
+        if compiler.is_like_msvc() {
+            command
+                .arg("advapi32.lib")
+                .arg(format!("/Fe{}", binary.display()));
+        } else {
+            command.args(["-pthread", "-lm", "-o"]).arg(&binary);
+        }
+        run(
+            &mut command,
+            temp.0.join(format!("{source}-compile.log")),
+            300,
+        )?;
+        println!(
+            "{}",
+            run(
+                &mut Command::new(binary),
+                temp.0.join(format!("{source}.log")),
+                900
+            )?
+        );
     }
-    if cfg!(target_arch = "aarch64") {
-        command.arg("-march=armv8-a+crypto");
-    }
-    command
-        .arg(root().join("tests/randomx/tests.cpp"))
-        .arg(library)
-        .args(["-pthread", "-lm", "-o"])
-        .arg(&binary);
-    run(&mut command, temp.0.join("compile.log"), 300)?;
-    println!(
-        "{}",
-        run(&mut Command::new(binary), temp.0.join("vectors.log"), 900)?
-    );
     Ok(())
 }

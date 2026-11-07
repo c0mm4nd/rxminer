@@ -320,8 +320,8 @@ namespace randomx {
 			throw std::runtime_error("setPagesRX");
 	}
 
-	void JitCompilerX86::generateProgram(Program& prog, ProgramConfiguration& pcfg) {
-		generateProgramPrologue(prog, pcfg);
+	void JitCompilerX86::generateProgram(Program& prog, ProgramConfiguration& pcfg, bool registersNormalized) {
+		generateProgramPrologue(prog, pcfg, registersNormalized);
 		if (vmFlags & RANDOMX_FLAG_V2) {
 			memcpy(code + codePos, codeReadDatasetV2, readDatasetV2Size);
 			codePos += readDatasetV2Size;
@@ -333,8 +333,8 @@ namespace randomx {
 		generateProgramEpilogue(prog, pcfg);
 	}
 
-	void JitCompilerX86::generateProgramLight(Program& prog, ProgramConfiguration& pcfg, uint32_t datasetOffset) {
-		generateProgramPrologue(prog, pcfg);
+	void JitCompilerX86::generateProgramLight(Program& prog, ProgramConfiguration& pcfg, uint32_t datasetOffset, bool registersNormalized) {
+		generateProgramPrologue(prog, pcfg, registersNormalized);
 		if (vmFlags & RANDOMX_FLAG_V2) {
 			emit(codeReadDatasetLightSshInitV2, readDatasetLightInitV2Size);
 		}
@@ -375,8 +375,7 @@ namespace randomx {
 		memcpy(code, codeDatasetInit, datasetInitSize);
 	}
 
-	void JitCompilerX86::generateProgramPrologue(Program& prog, ProgramConfiguration& pcfg) {
-		instructionOffsets.clear();
+	void JitCompilerX86::generateProgramPrologue(Program& prog, ProgramConfiguration& pcfg, bool registersNormalized) {
 		for (unsigned i = 0; i < RegistersCount; ++i) {
 			registerUsage[i] = -1;
 		}
@@ -385,11 +384,17 @@ namespace randomx {
 		memcpy(code + codePos - 48, &pcfg.eMask, sizeof(pcfg.eMask));
 		memcpy(code + codePos, codeLoopLoad, loopLoadSize);
 		codePos += loopLoadSize;
-		for (unsigned i = 0; i < prog.getSize(vmFlags); ++i) {
-			Instruction& instr = prog(i);
-			instr.src %= RegistersCount;
-			instr.dst %= RegistersCount;
-			generateCode(instr, i);
+		if (registersNormalized) {
+			for (unsigned i = 0; i < prog.getSize(vmFlags); ++i) {
+				generateCode(prog(i), i);
+			}
+		} else {
+			for (unsigned i = 0; i < prog.getSize(vmFlags); ++i) {
+				Instruction& instr = prog(i);
+				instr.src %= RegistersCount;
+				instr.dst %= RegistersCount;
+				generateCode(instr, i);
+			}
 		}
 		emit(REX_MOV_RR);
 		emitByte(0xc0 + pcfg.readReg2);
@@ -431,7 +436,7 @@ namespace randomx {
 	}
 
 	void JitCompilerX86::generateCode(Instruction& instr, int i) {
-		instructionOffsets.push_back(codePos);
+		instructionOffsets[i] = codePos;
 		auto generator = engine[instr.opcode];
 		(this->*generator)(instr, i);
 	}

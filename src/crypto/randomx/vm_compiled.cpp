@@ -52,7 +52,7 @@ namespace randomx {
 
 	template<class Allocator, bool softAes, bool secureJit>
 	void CompiledVm<Allocator, softAes, secureJit>::run(void* seed) {
-#if defined(RXM_NORMALIZED_X86)
+#if defined(RXM_NORMALIZED_PROGRAM)
 		VmBase<Allocator, softAes>::generateProgramNormalized(seed);
 #else
 		VmBase<Allocator, softAes>::generateProgram(seed);
@@ -61,7 +61,7 @@ namespace randomx {
 		if (secureJit) {
 			compiler.enableWriting();
 		}
-#if defined(RXM_NORMALIZED_X86)
+#if defined(RXM_NORMALIZED_PROGRAM)
 		compiler.generateProgram(program, config, true);
 #else
 		compiler.generateProgram(program, config);

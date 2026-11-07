@@ -52,6 +52,7 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 #if defined(RANDOMX_HAVE_VAES)
 void rxm_fillAes1Rx4_vaes(void *state, size_t outputSize, void *buffer);
 void rxm_fillAes4Rx4_vaes(void *state, size_t outputSize, void *buffer);
+void rxm_fillAes4Rx4Program_vaes(void *state, size_t outputSize, void *buffer);
 void rxm_hashAndFillAes1Rx4_vaes(void *scratchpad, size_t scratchpadSize,
                                  void *hash, void *fill_state);
 #endif

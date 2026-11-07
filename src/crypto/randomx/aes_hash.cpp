@@ -197,14 +197,6 @@ template void fillAes1Rx4<false>(void *state, size_t outputSize, void *buffer);
 #define AES_GEN_4R_KEY6 0xf63befa7, 0x2ba9660a, 0xf765a38b, 0xf273c9e7
 #define AES_GEN_4R_KEY7 0xc0b0762d, 0x0c06d1fd, 0x915839de, 0x7a7cd609
 
-static inline void normalizeProgramOutput(void* buffer, size_t size) {
-	auto* bytes = static_cast<uint8_t*>(buffer);
-	for (size_t offset = 128; offset < size; offset += 8) {
-		bytes[offset + 1] &= 7;
-		bytes[offset + 2] &= 7;
-	}
-}
-
 static inline rx_vec_i128 maskProgramOutput(rx_vec_i128 value, rx_vec_i128 mask) {
 	// These casts preserve bits; the operation performs no FP arithmetic.
 	return rx_cast_vec_f2i(rx_and_vec_f128(rx_cast_vec_i2f(value), rx_cast_vec_i2f(mask)));
@@ -217,8 +209,8 @@ static void fillAes4Rx4Impl(void *state, size_t outputSize, void *buffer) {
 
 #if defined(RANDOMX_HAVE_VAES) && (defined(__x86_64__) || defined(__i386__))
 	if (!softAes && randomx::cpu.hasVaes()) {
-		rxm_fillAes4Rx4_vaes(state, outputSize, buffer);
-		if (normalized) normalizeProgramOutput(buffer, outputSize);
+		if (normalized) rxm_fillAes4Rx4Program_vaes(state, outputSize, buffer);
+		else rxm_fillAes4Rx4_vaes(state, outputSize, buffer);
 		return;
 	}
 #endif

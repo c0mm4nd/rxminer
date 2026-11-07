@@ -65,14 +65,15 @@ namespace randomx {
 }
 
 #if defined(RANDOMX_COMPILER_X86)
+#define RXM_NORMALIZED_PROGRAM 1
 #ifdef _WIN32
 #include "jit_compiler_x86_windows.hpp"
 #else
 #include "jit_compiler_x86.hpp"
-#define RXM_NORMALIZED_X86 1
 #endif
 #elif defined(RANDOMX_COMPILER_A64)
 #include "jit_compiler_a64.hpp"
+#define RXM_NORMALIZED_PROGRAM 1
 #elif defined(RANDOMX_COMPILER_RV64)
 #include "jit_compiler_rv64.hpp"
 #else

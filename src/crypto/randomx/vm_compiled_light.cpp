@@ -47,7 +47,7 @@ namespace randomx {
 
 	template<class Allocator, bool softAes, bool secureJit>
 	void CompiledLightVm<Allocator, softAes, secureJit>::run(void* seed) {
-#if defined(RXM_NORMALIZED_X86)
+#if defined(RXM_NORMALIZED_PROGRAM)
 		VmBase<Allocator, softAes>::generateProgramNormalized(seed);
 #else
 		VmBase<Allocator, softAes>::generateProgram(seed);
@@ -56,7 +56,7 @@ namespace randomx {
 		if (secureJit) {
 			compiler.enableWriting();
 		}
-#if defined(RXM_NORMALIZED_X86)
+#if defined(RXM_NORMALIZED_PROGRAM)
 		compiler.generateProgramLight(program, config, datasetOffset, true);
 #else
 		compiler.generateProgramLight(program, config, datasetOffset);

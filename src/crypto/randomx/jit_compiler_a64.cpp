@@ -127,7 +127,20 @@ void JitCompilerA64::enableAll()
 		throw std::runtime_error("setPagesRWX");
 }
 
-void JitCompilerA64::generateProgram(Program& program, ProgramConfiguration& config)
+template<bool registersNormalized>
+void JitCompilerA64::generateInstructions(Program& program, uint32_t& codePos)
+{
+	for (uint32_t i = 0; i < program.getSize(flags); ++i) {
+		Instruction& instr = program(i);
+		if (!registersNormalized) {
+			instr.src %= RegistersCount;
+			instr.dst %= RegistersCount;
+		}
+		(this->*engine[instr.opcode])(instr, codePos);
+	}
+}
+
+void JitCompilerA64::generateProgram(Program& program, ProgramConfiguration& config, bool registersNormalized)
 {
 	uint32_t codePos = MainLoopBegin + 4;
 
@@ -144,13 +157,8 @@ void JitCompilerA64::generateProgram(Program& program, ProgramConfiguration& con
 	for (uint32_t i = 0; i < RegistersCount; ++i)
 		reg_changed_offset[i] = codePos;
 
-	for (uint32_t i = 0; i < program.getSize(flags); ++i)
-	{
-		Instruction& instr = program(i);
-		instr.src %= RegistersCount;
-		instr.dst %= RegistersCount;
-		(this->*engine[instr.opcode])(instr, codePos);
-	}
+	if (registersNormalized) generateInstructions<true>(program, codePos);
+	else generateInstructions<false>(program, codePos);
 
 	// Update spMix2
 	// eor w20, config.readReg2, config.readReg3
@@ -218,7 +226,7 @@ void JitCompilerA64::generateProgram(Program& program, ProgramConfiguration& con
 #endif
 }
 
-void JitCompilerA64::generateProgramLight(Program& program, ProgramConfiguration& config, uint32_t datasetOffset)
+void JitCompilerA64::generateProgramLight(Program& program, ProgramConfiguration& config, uint32_t datasetOffset, bool registersNormalized)
 {
 	uint32_t codePos = MainLoopBegin + 4;
 
@@ -235,13 +243,8 @@ void JitCompilerA64::generateProgramLight(Program& program, ProgramConfiguration
 	for (uint32_t i = 0; i < RegistersCount; ++i)
 		reg_changed_offset[i] = codePos;
 
-	for (uint32_t i = 0; i < program.getSize(flags); ++i)
-	{
-		Instruction& instr = program(i);
-		instr.src %= RegistersCount;
-		instr.dst %= RegistersCount;
-		(this->*engine[instr.opcode])(instr, codePos);
-	}
+	if (registersNormalized) generateInstructions<true>(program, codePos);
+	else generateInstructions<false>(program, codePos);
 
 	// Update spMix2
 	// eor w20, config.readReg2, config.readReg3

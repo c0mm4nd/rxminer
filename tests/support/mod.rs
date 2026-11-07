@@ -2,10 +2,11 @@
 #![allow(dead_code)]
 
 use anyhow::{bail, ensure, Context, Result};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     fs::{self, File},
     net::TcpListener,
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -87,11 +88,12 @@ impl Process {
     pub fn spawn(command: &mut Command, log: impl AsRef<Path>) -> Result<Self> {
         let log = log.as_ref().to_owned();
         let file = File::create(&log)?;
+        #[cfg(unix)]
+        command.process_group(0);
         let child = command
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
             .stderr(file)
-            .process_group(0)
             .spawn()
             .with_context(|| format!("spawn {}", command.get_program().to_string_lossy()))?;
         Ok(Self { child, log })
@@ -108,6 +110,7 @@ impl Process {
         Ok(())
     }
 
+    #[cfg(unix)]
     pub fn signal(&mut self, signal: libc::c_int) -> Result<()> {
         if self.child.try_wait()?.is_none() {
             // SAFETY: this is the process group of our unreaped child, created by Command.
@@ -155,9 +158,17 @@ impl Drop for Process {
             }
         }
         if running {
-            let _ = self.signal(libc::SIGINT);
-            if self.wait(5).is_err() {
-                let _ = self.signal(libc::SIGKILL);
+            #[cfg(unix)]
+            {
+                let _ = self.signal(libc::SIGINT);
+                if self.wait(5).is_err() {
+                    let _ = self.signal(libc::SIGKILL);
+                    let _ = self.child.wait();
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = self.child.kill();
                 let _ = self.child.wait();
             }
         }

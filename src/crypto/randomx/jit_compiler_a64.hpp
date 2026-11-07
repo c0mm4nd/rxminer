@@ -49,8 +49,8 @@ namespace randomx {
 		JitCompilerA64();
 		~JitCompilerA64();
 
-		void generateProgram(Program&, ProgramConfiguration&);
-		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
+		void generateProgram(Program&, ProgramConfiguration&, bool registersNormalized = false);
+		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t, bool registersNormalized = false);
 
 		void generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t> &);
 
@@ -68,6 +68,8 @@ namespace randomx {
 		void setFlags(randomx_flags f) { flags = f; }
 	private:
 		static InstructionGeneratorA64 engine[256];
+		template<bool registersNormalized>
+		void generateInstructions(Program&, uint32_t&);
 		uint32_t reg_changed_offset[8];
 		size_t mappedBytes;
 		uint8_t* code;

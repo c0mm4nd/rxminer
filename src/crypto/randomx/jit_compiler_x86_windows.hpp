@@ -47,8 +47,8 @@ namespace randomx {
 	public:
 		JitCompilerX86();
 		~JitCompilerX86();
-		void generateProgram(Program&, ProgramConfiguration&);
-		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
+		void generateProgram(Program&, ProgramConfiguration&, bool registersNormalized = false);
+		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t, bool registersNormalized = false);
 		void generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t> &);
 		void generateDatasetInitCode();
 		ProgramFunc* getProgramFunc() {
@@ -68,7 +68,7 @@ namespace randomx {
 		void setFlags(randomx_flags f) { vmFlags = f; }
 	private:
 		static InstructionGeneratorX86 engine[256];
-		std::vector<int32_t> instructionOffsets;
+		int32_t instructionOffsets[RANDOMX_PROGRAM_MAX_SIZE];
 		int registerUsage[RegistersCount];
 		uint8_t* code;
 		size_t mappedSize;
@@ -76,7 +76,7 @@ namespace randomx {
 
 		randomx_flags vmFlags;
 
-		void generateProgramPrologue(Program&, ProgramConfiguration&);
+		void generateProgramPrologue(Program&, ProgramConfiguration&, bool);
 		void generateProgramEpilogue(Program&, ProgramConfiguration&);
 		void genAddressReg(Instruction&, bool);
 		void genAddressRegDst(Instruction&);

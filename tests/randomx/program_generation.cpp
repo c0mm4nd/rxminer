@@ -30,6 +30,11 @@ static unsigned check() {
         // is only 8 bytes; match the VM's explicitly aligned program storage.
         alignas(64) randomx::Program reference{};
         fillAes4Rx4<softAes>(seed, sizeof(reference), &reference);
+        if (!softAes) {
+            alignas(64) randomx::Program software{};
+            fillAes4Rx4<true>(seed, sizeof(software), &software);
+            if (std::memcmp(&reference, &software, sizeof(reference))) std::abort();
+        }
         for (bool v2 : {false, true, false, true}) {
             if (v2) vm.setFlagV2(); else vm.clearFlagV2();
             const size_t active = 128 + (v2 ? 384 : 256) * 8;
