@@ -39,6 +39,10 @@ jobs:
           rustup toolchain install '${{ matrix.rust }}' --profile minimal --component rustfmt --component clippy
           rustup default '${{ matrix.rust }}'
       - run: cargo fmt --check
+      - name: Standalone Rust RandomX core
+        run: |
+          rustc --edition=2021 --test src/randomx_core/mod.rs -o "$RUNNER_TEMP/randomx-core-tests"
+          "$RUNNER_TEMP/randomx-core-tests"
       - run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
       - run: cargo test --locked
       - name: Full dataset and JIT consensus
@@ -90,6 +94,10 @@ jobs:
           components: clippy
       - name: Rust lint checks
         run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
+      - name: Standalone Rust RandomX core
+        run: |
+          rustc --edition=2021 --test src/randomx_core/mod.rs -o "$RUNNER_TEMP/randomx-core-tests${{ matrix.exe }}"
+          "$RUNNER_TEMP/randomx-core-tests${{ matrix.exe }}"
       - name: Unit tests and hash vectors
         timeout-minutes: 5
         run: cargo test --locked -- --nocapture

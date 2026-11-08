@@ -27,6 +27,18 @@ cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
 cargo test --locked
 ```
 
+The Rust RandomX migration core also has a standalone test build that needs
+neither the native RandomX library nor a C/C++ compiler:
+
+```bash
+rustc --edition=2021 --test src/randomx_core/mod.rs -o /tmp/randomx-core-tests
+/tmp/randomx-core-tests
+cargo test --locked --test randomx_rust
+```
+
+The last command is the Rust/native differential and requires the normal native
+toolchain. See [migration coverage](RANDOMX.md#rust-migration) for the current scope.
+
 ## Full dataset and native checks
 
 The complete native differential suite runs on Linux x86-64. Allow at least

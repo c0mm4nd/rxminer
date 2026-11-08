@@ -8,6 +8,7 @@ pub mod job;
 pub mod miner;
 pub mod proxy;
 pub mod randomx;
+pub mod randomx_core;
 pub mod stratum;
 mod tls;
 #[cfg(target_os = "linux")]
