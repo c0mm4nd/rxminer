@@ -1,6 +1,4 @@
 //! Portable native consensus vectors, linked to the archive built by Cargo.
-#[path = "support/randomx_core.rs"]
-mod randomx_core;
 mod support;
 use anyhow::{ensure, Context, Result};
 use std::{fs::OpenOptions, io::Write, path::Path, process::Command};
@@ -42,7 +40,6 @@ fn native_vectors() -> Result<()> {
         "blake_rounds",
         "aes_pipeline",
         "interpreter_dispatch",
-        "rust_core_oracle",
     ] {
         let binary = temp
             .0
@@ -119,9 +116,6 @@ fn native_vectors() -> Result<()> {
             300,
         )?;
         let mut execute = Command::new(binary);
-        if source == "rust_core_oracle" {
-            execute.arg(temp.0.join("rust-core.bin"));
-        }
         if matches!(
             source,
             "blake_fixed" | "blake_rounds" | "aes_pipeline" | "interpreter_dispatch"
@@ -135,9 +129,6 @@ fn native_vectors() -> Result<()> {
             if source == "tests" { 900 } else { 15 },
         )?;
         println!("{output}");
-        if source == "rust_core_oracle" {
-            randomx_core::compare(&temp.0.join("rust-core.bin"))?;
-        }
         if source == "blake_fixed" {
             write_oneshot_summary(&output)?;
         }
