@@ -582,7 +582,8 @@ mod tests {
                 )
                 .unwrap();
                 receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-                peer.get_mut().shutdown(Shutdown::Both).unwrap();
+                // Dropping the peer closes this connection; the client may
+                // already have shut it down during the final fixture cleanup.
             }));
         }
         let backup = pools[1].address.url.clone();
