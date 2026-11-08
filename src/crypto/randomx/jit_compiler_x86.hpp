@@ -47,7 +47,8 @@ namespace randomx {
 
 	class JitCompilerX86 {
 	public:
-		JitCompilerX86();
+		// Full-memory VMs do not need the superscalar/dataset-initializer area.
+		explicit JitCompilerX86(bool fullMemoryOnly = false);
 		~JitCompilerX86();
 		// The normalized fast path is for programs emitted by fillAes4Rx4Program.
 		// Keep the default raw-program path for other compiler clients/tests.
@@ -116,10 +117,13 @@ namespace randomx {
 		bool stackReciprocals = false;
 		uint8_t* code;
 		size_t mappedSize;
+		size_t codeSize;
+		int32_t epilogueOffset;
 		int prefetchMode;
 		int32_t codePos;
 		bool hasBmi2 = false;
 		bool tuneRounding = false;
+		Program* currentProgram = nullptr; // only read while generating code
 
 		randomx_flags vmFlags;
 

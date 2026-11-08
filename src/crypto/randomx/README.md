@@ -42,6 +42,14 @@ instruction-cache synchronization, and each VM owns its code and literal buffers
 - JIT code uses a fixed instruction-offset buffer, typed dispatch and local
   emission cursors. Runtime-gated BMI2 helpers, short branches and Zen 2 v1
   rounding helpers reduce preparation or execution work.
+- Full-memory Unix x86-64 VMs omit the unused superscalar code region and place
+  their epilogue beside the constant tables. The default-profile mapping is
+  16 KiB instead of 80 KiB; ordinary 4 KiB pages also avoid a separate resident
+  epilogue page. Light VMs and cache initialization keep the general layout,
+  and explicit JIT huge-page allocation remains rounded to 2 MiB.
+- The Unix x86-64 JIT removes v1 rounding updates overwritten before any use.
+  Arithmetic, branches and the program boundary stop the forward scan; v2
+  conditional rounding updates are retained.
 - Reciprocal constants are hoisted into VM-private storage. Leaf System V
   VMs can use the stack red zone; calling paths use a private code table.
   Secure JIT writes code and constants before enabling execution.
@@ -49,10 +57,15 @@ instruction-cache synchronization, and each VM owns its code and literal buffers
   normalizes stored register fields for the Unix x86 compiled VM while preserving
   the entropy header, AES feedback and raw-generator interface.
 - Unkeyed BLAKE2b with a 256-byte input and 32/64-byte output processes the
-  register file directly. Other sizes and keyed inputs retain the streaming
-  path. Overlapping and unaligned buffers remain supported.
+  register file directly. Inputs up to 128 bytes also bypass streaming-state
+  preparation for 32/64-byte output, including 64-byte seed expansion. These
+  shortcuts apply to every architecture; other sizes and keyed inputs retain
+  the streaming path. Overlapping and unaligned buffers remain supported.
 - The AES hash/fill loop processes two blocks per iteration. Optional VAES
   kernels are disabled by default and selected at runtime when enabled.
+- Interpreter opcode dispatch is inlined into the bytecode loop, avoiding
+  a function boundary per executed instruction. Single stepping shares the
+  same handlers and remains available for differential validation.
 
 These changes do not alter the hash algorithm or introduce shared mutable
 state between VMs. Performance should be measured on the target system.

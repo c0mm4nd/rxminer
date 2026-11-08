@@ -123,12 +123,7 @@ namespace randomx {
 			}
 		}
 
-		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags) {
-			for (int pc = 0, n = Program::getSize(flags); pc < n; ++pc) {
-				auto& ibc = bytecode[pc];
-				executeInstruction(ibc, pc, scratchpad, config, flags);
-			}
-		}
+		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags);
 
 		void compileInstruction(RANDOMX_GEN_ARGS)
 #ifdef RANDOMX_GEN_TABLE

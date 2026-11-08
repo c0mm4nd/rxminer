@@ -87,6 +87,9 @@ The pool is cleared when runtime configuration is reapplied.
 length. Reserved pages must already be available; the miner does not reserve
 system pages. A 1 GiB dataset mapping requires three pages. Logs distinguish
 2 MiB datasets from 1 GiB datasets. JIT huge-page allocation falls back silently.
+An allocated JIT huge page consumes 2 MiB per VM even when its code fits in the
+compact 16 KiB full-memory Unix x86-64 buffer; ordinary-page JIT allocations
+use the smaller mapping.
 
 Profiles select `cpu["rx/0"]`, then `cpu.rx`, then `cpu["*"]`. Entries can be
 CPU IDs (`-1` means unbound), `[1, CPU_ID]` pairs, or an object containing

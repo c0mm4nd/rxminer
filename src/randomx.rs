@@ -136,6 +136,10 @@ fn flags() -> u32 {
 }
 
 struct Cache(NonNull<c_void>);
+#[cfg(test)]
+thread_local! {
+    static CACHE_INITIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 // SAFETY: Cache is initialized before sharing. Dataset initialization only
 // reads it; no cache mutation occurs after Cache::new returns.
 unsafe impl Send for Cache {}
@@ -150,7 +154,14 @@ impl Cache {
     }
     fn with_tuning(seed: &[u8], tuning: Tuning) -> Result<Self> {
         tuning.validate()?;
-        let flags = (flags() & (JIT | SECURE)) | tuning.argon2.unwrap_or(flags() & ARGON2);
+        // Cache JIT accelerates full dataset construction only. Light VMs
+        // compile their own superscalar code (or interpret cache.programs).
+        let cache_jit = if tuning.mode == MemoryMode::Light {
+            0
+        } else {
+            flags() & (JIT | SECURE)
+        };
+        let flags = cache_jit | tuning.argon2.unwrap_or(flags() & ARGON2);
         // SAFETY: flags are from RandomX's own capability detection.
         let mut ptr = unsafe { randomx_alloc_cache(flags) };
         if ptr.is_null() && flags & JIT != 0 {
@@ -162,6 +173,8 @@ impl Cache {
         unsafe {
             randomx_init_cache(cache.0.as_ptr(), seed.as_ptr().cast(), seed.len());
         }
+        #[cfg(test)]
+        CACHE_INITIALIZATIONS.with(|count| count.set(count.get() + 1));
         Ok(cache)
     }
 }
@@ -201,13 +214,38 @@ impl Dataset {
         huge_pages: bool,
         tuning: Tuning,
     ) -> Result<Self> {
+        Self::build_with_fallback(seed, cores, node, stop, huge_pages, tuning, |cache| {
+            Self::build_full(cache, cores, node, stop, huge_pages, tuning)
+        })
+    }
+
+    fn build_with_fallback(
+        seed: &[u8; 32],
+        cores: &[Core],
+        node: Option<usize>,
+        stop: &AtomicBool,
+        huge_pages: bool,
+        tuning: Tuning,
+        build_full: impl FnOnce(&Cache) -> Result<Self>,
+    ) -> Result<Self> {
         tuning.validate()?;
         ensure!(
             !cores.is_empty() && !stop.load(Ordering::Relaxed),
             "initialization interrupted or no CPUs"
         );
+        if cores[0].pinned {
+            topology::pin(cores[0].cpu).context("pin cache/dataset allocator")?;
+        }
+        if let Some(node) = node {
+            let _ = topology::bind_node(node);
+        }
+        // The initialized cache belongs to this attempt, not to the full-mode
+        // branch. If allocation or an initializer fails, light mode can take
+        // ownership without another 256 MiB allocation and cache initialization.
+        let cache = Cache::with_tuning(seed, tuning)?;
+        ensure!(!stop.load(Ordering::Relaxed), "initialization interrupted");
         if tuning.mode != MemoryMode::Light {
-            match Self::build_full(seed, cores, node, stop, huge_pages, tuning) {
+            match build_full(&cache) {
                 Ok(dataset) => return Ok(dataset),
                 Err(error) if tuning.mode == MemoryMode::Auto && !stop.load(Ordering::Relaxed) => {
                     crate::status!("[rx] full-memory initialization failed: {error:#}; switching to light mode");
@@ -215,17 +253,10 @@ impl Dataset {
                 Err(error) => return Err(error),
             }
         }
-        if cores[0].pinned {
-            topology::pin(cores[0].cpu).context("pin cache initializer")?;
-        }
-        if let Some(node) = node {
-            let _ = topology::bind_node(node);
-        }
-        let cache = Arc::new(Cache::with_tuning(seed, tuning)?);
         ensure!(!stop.load(Ordering::Relaxed), "initialization interrupted");
         Ok(Self {
             ptr: None,
-            cache: Some(cache),
+            cache: Some(Arc::new(cache)),
             tuning,
             huge_pages_requested: huge_pages,
             giga_pages: false,
@@ -252,7 +283,7 @@ impl Dataset {
     }
 
     fn build_full(
-        seed: &[u8; 32],
+        cache: &Cache,
         cores: &[Core],
         node: Option<usize>,
         stop: &AtomicBool,
@@ -260,14 +291,7 @@ impl Dataset {
         tuning: Tuning,
     ) -> Result<Self> {
         ensure!(!cores.is_empty(), "dataset initialization requires CPUs");
-        if cores[0].pinned {
-            topology::pin(cores[0].cpu).context("pin dataset allocator")?;
-        }
-        if let Some(node) = node {
-            let _ = topology::bind_node(node);
-        }
         ensure!(!stop.load(Ordering::Relaxed), "initialization interrupted");
-        let cache = Cache::with_tuning(seed, tuning)?;
         let mut allocation_flags = if tuning.one_gb_pages {
             256
         } else if huge_pages {
@@ -304,7 +328,6 @@ impl Dataset {
             let mut handles = Vec::new();
             for core in cores {
                 let dataset = &dataset;
-                let cache = &cache;
                 let next = &next;
                 handles.push(
                     thread::Builder::new()
@@ -350,7 +373,8 @@ impl Dataset {
             }
             Ok(())
         })?;
-        // The 256 MiB cache is released here before mining begins.
+        // Scoped initializers have joined; the caller can release the cache
+        // on success or retain it for a light-mode fallback on failure.
         Ok(dataset)
     }
 }
@@ -513,6 +537,116 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_fallback_reuses_cache_and_keeps_it_alive_for_vm() {
+        let seed = [0x57; 32];
+        let blob = b"auto fallback retains the initialized seed".to_vec();
+        let expected = light_hashes(&seed, std::slice::from_ref(&blob))[0];
+        let cores = [Core {
+            cpu: 0,
+            node: 0,
+            pinned: false,
+            smt: false,
+        }];
+        let stop = AtomicBool::new(false);
+        let before = CACHE_INITIALIZATIONS.with(|count| count.get());
+        let attempted_cache = std::cell::Cell::new(None);
+        let dataset = Dataset::build_with_fallback(
+            &seed,
+            &cores,
+            None,
+            &stop,
+            true,
+            Tuning {
+                mode: MemoryMode::Auto,
+                hw_aes: Some(false),
+                one_gb_pages: true,
+                ..Tuning::default()
+            },
+            |cache| {
+                attempted_cache.set(Some(cache.0));
+                anyhow::bail!("injected dataset allocation failure")
+            },
+        )
+        .unwrap();
+        assert_eq!(CACHE_INITIALIZATIONS.with(|count| count.get()), before + 1);
+        assert!(dataset.is_light());
+        assert!(!dataset.uses_huge_pages() && !dataset.uses_giga_pages());
+        assert!(dataset.huge_pages_requested);
+        assert_eq!(dataset.tuning.hw_aes, Some(false));
+        let cache = dataset.cache.as_ref().unwrap();
+        assert_eq!(Some(cache.0), attempted_cache.get());
+        let lifetime = Arc::downgrade(cache);
+        let dataset = Arc::new(dataset);
+        let mut vm = Vm::new(dataset.clone()).unwrap();
+        drop(dataset);
+        assert!(lifetime.upgrade().is_some());
+        vm.first(&blob);
+        assert_eq!(vm.last(), expected);
+        drop(vm);
+        assert!(lifetime.upgrade().is_none());
+    }
+
+    #[test]
+    fn fallback_respects_fast_light_and_cancellation() {
+        let cores = [Core {
+            cpu: 0,
+            node: 0,
+            pinned: false,
+            smt: false,
+        }];
+        for (mode, cancel) in [
+            (MemoryMode::Fast, false),
+            (MemoryMode::Light, false),
+            (MemoryMode::Auto, true),
+        ] {
+            let stop = AtomicBool::new(false);
+            let before = CACHE_INITIALIZATIONS.with(|count| count.get());
+            let attempted = std::cell::Cell::new(false);
+            let result = Dataset::build_with_fallback(
+                &[0x91; 32],
+                &cores,
+                None,
+                &stop,
+                false,
+                Tuning {
+                    mode,
+                    ..Tuning::default()
+                },
+                |_| {
+                    attempted.set(true);
+                    stop.store(cancel, Ordering::Relaxed);
+                    anyhow::bail!("injected initializer failure")
+                },
+            );
+            assert_eq!(CACHE_INITIALIZATIONS.with(|count| count.get()), before + 1);
+            if mode == MemoryMode::Light {
+                assert!(!attempted.get());
+                assert!(result.unwrap().is_light());
+            } else {
+                assert!(attempted.get());
+                let error = result
+                    .err()
+                    .expect("fast/cancelled build must not fall back");
+                assert!(error.to_string().contains("injected initializer failure"));
+            }
+        }
+        let before = CACHE_INITIALIZATIONS.with(|count| count.get());
+        assert!(Dataset::build_with_tuning(
+            &[0; 32],
+            &cores,
+            None,
+            &AtomicBool::new(true),
+            false,
+            Tuning {
+                mode: MemoryMode::Auto,
+                ..Tuning::default()
+            },
+        )
+        .is_err());
+        assert_eq!(CACHE_INITIALIZATIONS.with(|count| count.get()), before);
+    }
+
+    #[test]
     fn dataset_chunks_cover_every_item_once() {
         for items in [0, 1, 65_535, 65_536, 65_537, 4_194_321] {
             let next = AtomicU64::new(0);
@@ -665,7 +799,18 @@ mod tests {
     fn jit_and_secure_jit_match_interpreter() {
         assert_ne!(flags() & JIT, 0, "this test requires a JIT backend");
         for seed in [b"jit differential seed A", b"jit differential seed B"] {
-            let cache = Arc::new(Cache::new(seed).unwrap());
+            // A light cache deliberately has no dataset-initialization JIT;
+            // both VM JIT variants must remain available independently.
+            let cache = Arc::new(
+                Cache::with_tuning(
+                    seed,
+                    Tuning {
+                        mode: MemoryMode::Light,
+                        ..Tuning::default()
+                    },
+                )
+                .unwrap(),
+            );
             let make_vm = |extra| {
                 // SAFETY: initialized shared cache; each light VM is owned by
                 // its worker thread and keeps its own Arc to the cache.

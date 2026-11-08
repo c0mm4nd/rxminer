@@ -30,28 +30,60 @@ fn native_regressions() -> Result<()> {
         .out_dir(&temp.0)
         .get_compiler();
     // Consensus, generation and BLAKE2b checks run in native_vectors on every platform.
-    let binary = temp.0.join("jit_optimizations");
-    let mut command = compiler.to_command();
-    command
-        .args(["-std=c++11", "-O2", "-maes", "-DHAVE_POSIX_MEMALIGN", "-I"])
-        .arg(root().join("src/crypto/randomx"))
-        .arg(root().join("tests/randomx/jit_optimizations.cpp"))
-        .arg(&library)
-        .args(["-pthread", "-lm", "-o"])
-        .arg(&binary);
-    run(&mut command, temp.0.join("compile.log"), 120)?;
-    println!(
-        "{}",
-        run(&mut Command::new(&binary), temp.0.join("native.log"), 180)?
-    );
-    println!(
-        "{}",
+    for source in [
+        "jit_optimizations",
+        "jit_rounding",
+        "jit_swaps",
+        "jit_memory",
+    ] {
+        let binary = temp.0.join(source);
+        let mut command = compiler.to_command();
+        command
+            .args(["-std=c++11", "-O2", "-maes", "-DHAVE_POSIX_MEMALIGN", "-I"])
+            .arg(root().join("src/crypto/randomx"))
+            .arg(root().join(format!("tests/randomx/{source}.cpp")))
+            .arg(&library)
+            .args(["-pthread", "-lm", "-o"])
+            .arg(&binary);
         run(
-            Command::new(&binary).arg("--normalized"),
-            temp.0.join("normalized.log"),
-            180
-        )?
-    );
+            &mut command,
+            temp.0.join(format!("{source}-compile.log")),
+            120,
+        )?;
+        println!(
+            "{}",
+            run(
+                &mut Command::new(&binary),
+                temp.0.join(format!("{source}.log")),
+                180
+            )?
+        );
+        if source == "jit_optimizations" {
+            println!(
+                "{}",
+                run(
+                    Command::new(&binary).arg("--normalized"),
+                    temp.0.join("normalized.log"),
+                    180
+                )?
+            );
+            for normalized in [false, true] {
+                let mut command = Command::new(&binary);
+                command.arg("--compact");
+                if normalized {
+                    command.arg("--normalized");
+                }
+                println!(
+                    "{}",
+                    run(
+                        &mut command,
+                        temp.0.join(format!("compact-{normalized}.log")),
+                        180
+                    )?
+                );
+            }
+        }
+    }
     Ok(())
 }
 

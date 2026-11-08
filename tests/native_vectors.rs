@@ -39,6 +39,7 @@ fn native_vectors() -> Result<()> {
         "blake_fixed",
         "blake_rounds",
         "aes_pipeline",
+        "interpreter_dispatch",
     ] {
         let binary = temp
             .0
@@ -61,7 +62,7 @@ fn native_vectors() -> Result<()> {
             }
         }
         command.arg(root().join(format!("tests/randomx/{source}.cpp")));
-        if matches!(source, "blake_rounds" | "aes_pipeline") {
+        if matches!(source, "blake_fixed" | "blake_rounds" | "aes_pipeline") {
             let aes = source == "aes_pipeline";
             let mut reference = cc::Build::new();
             reference
@@ -79,6 +80,8 @@ fn native_vectors() -> Result<()> {
                 .include(root().join("src/crypto/randomx"))
                 .file(root().join(if aes {
                     "tests/randomx/aes_legacy.cpp"
+                } else if source == "blake_fixed" {
+                    "tests/randomx/blake_streaming.c"
                 } else {
                     "tests/randomx/blake_compact.c"
                 }));
@@ -113,8 +116,10 @@ fn native_vectors() -> Result<()> {
             300,
         )?;
         let mut execute = Command::new(binary);
-        if matches!(source, "blake_rounds" | "aes_pipeline")
-            && std::env::var("RXMINER_SHORT_BENCH").as_deref() == Ok("1")
+        if matches!(
+            source,
+            "blake_fixed" | "blake_rounds" | "aes_pipeline" | "interpreter_dispatch"
+        ) && std::env::var("RXMINER_SHORT_BENCH").as_deref() == Ok("1")
         {
             execute.arg("--sample");
         }
@@ -124,12 +129,75 @@ fn native_vectors() -> Result<()> {
             if source == "tests" { 900 } else { 15 },
         )?;
         println!("{output}");
+        if source == "blake_fixed" {
+            write_oneshot_summary(&output)?;
+        }
         if source == "blake_rounds" {
             write_short_summary(&output)?;
         }
         if source == "aes_pipeline" {
             write_aes_summary(&output)?;
         }
+        if source == "interpreter_dispatch" {
+            write_dispatch_summary(&output)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_dispatch_summary(output: &str) -> Result<()> {
+    let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+        return Ok(());
+    };
+    let mut rows = String::new();
+    for line in output
+        .lines()
+        .filter_map(|line| line.strip_prefix("RXM_DISPATCH_SAMPLE "))
+    {
+        let row: serde_json::Value = serde_json::from_str(line)?;
+        let before = row["single_step_ns"]
+            .as_f64()
+            .context("single-step timing")?;
+        let after = row["loop_ns"].as_f64().context("loop dispatch timing")?;
+        ensure!(before > 0.0 && after > 0.0, "invalid dispatch timing");
+        rows.push_str(&format!(
+            "| {} | {} | {before:.1} | {after:.1} | {:.3}× |\n",
+            row["version"],
+            row["pairs"],
+            before / after
+        ));
+    }
+    if !rows.is_empty() {
+        let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
+        writeln!(summary, "### Interpreter dispatch: short sample\n\nRetained single-step dispatch versus loop-local dispatch; 16-program corpus, identical scratchpad address and copy-in warmup, alternating order. Median corpus-average ns per program execution. Budget: 500 ms between fixed corpus batches. Excludes dataset accesses, JIT and full-hash setup; these numbers are not mining hashrate.\n\n| Version | Sample pairs | Single-step ns | Loop ns | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
+    }
+    Ok(())
+}
+
+fn write_oneshot_summary(output: &str) -> Result<()> {
+    let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+        return Ok(());
+    };
+    let mut rows = String::new();
+    for line in output
+        .lines()
+        .filter_map(|line| line.strip_prefix("RXM_ONESHOT_SAMPLE "))
+    {
+        let row: serde_json::Value = serde_json::from_str(line)?;
+        let streaming = row["streaming_ns"].as_f64().context("streaming timing")?;
+        let current = row["current_ns"].as_f64().context("one-shot timing")?;
+        ensure!(streaming > 0.0 && current > 0.0, "invalid timing sample");
+        rows.push_str(&format!(
+            "| {} → {} B | {} | {streaming:.1} | {current:.1} | {:.3}× |\n",
+            row["input"],
+            row["output"],
+            row["pairs"],
+            streaming / current
+        ));
+    }
+    if !rows.is_empty() {
+        let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
+        writeln!(summary, "### BLAKE2b one-shot preparation: short sample\n\nSame compression kernel, compiler and optimization level; reference disables one-shot shortcuts. Alternating order, median nanoseconds per operation. Budget: 500 ms, checked between fixed batches. Informational only; these are kernel timings, not mining hashrate.\n\n| Input → digest | Sample pairs | Streaming ns/op | Current ns/op | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
     }
     Ok(())
 }
@@ -186,7 +254,7 @@ fn write_aes_summary(output: &str) -> Result<()> {
     }
     if !rows.is_empty() {
         let mut summary = OpenOptions::new().create(true).append(true).open(path)?;
-        writeln!(summary, "### AES scratchpad hash/refill: short sample\n\nOne 2 MiB scratchpad per call; same address and copy-in warmup for both paths, same compiler and optimization level, alternating old/current order. Complete scratchpad, hash and generator state compared outside timing. Median milliseconds per call; ratio = legacy / current. Sampling budget: 500 ms, checked between pairs. BLAKE2b and AES together budget 1 second plus the final bounded batch. These are kernel timings, not mining hashrate; performance does not gate correctness.\n\n| AES mode | Sample pairs | Legacy ms | Current ms | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
+        writeln!(summary, "### AES scratchpad hash/refill: short sample\n\nOne 2 MiB scratchpad per call; same address and copy-in warmup for both paths, same compiler and optimization level, alternating old/current order. Complete scratchpad, hash and generator state compared outside timing. Median milliseconds per call; ratio = legacy / current. Sampling budget: 500 ms, checked between pairs. The three BLAKE2b/AES probes together budget 1.5 seconds plus their final bounded batches. These are kernel timings, not mining hashrate; performance does not gate correctness.\n\n| AES mode | Sample pairs | Legacy ms | Current ms | Ratio |\n| --- | ---: | ---: | ---: | ---: |\n{rows}")?;
     }
     Ok(())
 }

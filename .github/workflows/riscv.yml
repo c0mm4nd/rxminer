@@ -79,6 +79,8 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 20
+        env:
+          RXMINER_SHORT_BENCH: '1'
         run: cargo test --locked --release --test native_vectors -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/native.log"
       - name: JIT, secure JIT, full datasets and worker lifecycle
         id: consensus

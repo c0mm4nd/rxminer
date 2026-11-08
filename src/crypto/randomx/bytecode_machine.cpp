@@ -34,10 +34,17 @@ namespace randomx {
 	const int_reg_t BytecodeMachine::zero = 0;
 
 #define INSTR_CASE(x) case InstructionType::x: \
-	exe_ ## x(ibc, pc, scratchpad, config, flags); \
+	BytecodeMachine::exe_ ## x(ibc, pc, scratchpad, config, flags); \
 	break;
 
-	void BytecodeMachine::executeInstruction(RANDOMX_EXE_ARGS) {
+#if defined(_MSC_VER)
+#define RXM_DISPATCH_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define RXM_DISPATCH_INLINE inline __attribute__((always_inline))
+#else
+#define RXM_DISPATCH_INLINE inline
+#endif
+	static RXM_DISPATCH_INLINE void executeDecoded(RANDOMX_EXE_ARGS) {
 		switch (ibc.type)
 		{
 			INSTR_CASE(IADD_RS)
@@ -75,6 +82,23 @@ namespace randomx {
 		case InstructionType::IMUL_RCP: //executed as IMUL_R
 		default:
 			UNREACHABLE;
+		}
+	}
+
+#undef INSTR_CASE
+#undef RXM_DISPATCH_INLINE
+
+	void BytecodeMachine::executeInstruction(RANDOMX_EXE_ARGS) {
+		executeDecoded(ibc, pc, scratchpad, config, flags);
+	}
+
+	void BytecodeMachine::executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags) {
+		// Keep dispatch in the loop: an external call per instruction otherwise
+		// repeats argument setup and PC spills millions of times per hash.
+		// The single-step entry above shares exactly the same instruction rules.
+		for (int pc = 0, n = Program::getSize(flags); pc < n; ++pc) {
+			auto& ibc = bytecode[pc];
+			executeDecoded(ibc, pc, scratchpad, config, flags);
 		}
 	}
 

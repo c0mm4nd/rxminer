@@ -333,6 +333,7 @@ int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
 		goto fail;
 	}
 
+#if !defined(RXM_BLAKE2_STREAMING)
 	/* RandomX hashes its 256-byte register file eight times per hash.
 	 * Consume those two complete blocks directly, without a streaming buffer
 	 * or parameter block. Only the fields read by compress need initialization.
@@ -352,6 +353,31 @@ int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
 			store64((uint8_t*)out + i * sizeof(uint64_t), S.h[i]);
 		return 0;
 	}
+
+	/* Seed expansion and mining inputs commonly fit in a single block. Avoid
+	 * initializing the streaming buffer and parameter block. Copy short inputs
+	 * before writing the digest so in-place seed expansion remains supported. */
+	if (inlen <= BLAKE2B_BLOCKBYTES && keylen == 0 &&
+		(outlen == 32 || outlen == BLAKE2B_OUTBYTES)) {
+		unsigned int i;
+		const uint8_t* block = (const uint8_t*)in;
+		memcpy(S.h, blake2b_IV, sizeof(S.h));
+		S.h[0] ^= UINT64_C(0x01010000) | outlen;
+		S.t[0] = inlen;
+		S.t[1] = S.f[1] = 0;
+		S.f[0] = UINT64_MAX;
+		if (inlen < BLAKE2B_BLOCKBYTES) {
+			/* A null input is valid only for the empty message. */
+			if (inlen != 0) memcpy(S.buf, in, inlen);
+			memset(S.buf + inlen, 0, BLAKE2B_BLOCKBYTES - inlen);
+			block = S.buf;
+		}
+		blake2b_compress(&S, block);
+		for (i = 0; i < outlen / sizeof(uint64_t); ++i)
+			store64((uint8_t*)out + i * sizeof(uint64_t), S.h[i]);
+		return 0;
+	}
+#endif
 
 	if (keylen > 0) {
 		if (blake2b_init_key(&S, outlen, key, keylen) < 0) {

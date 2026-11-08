@@ -31,11 +31,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdexcept>
 #include <cstring>
 #include <climits>
+#include <algorithm>
 #include "jit_compiler_x86.hpp"
 #include "jit_compiler_x86_static.hpp"
 #include "superscalar.hpp"
 #include "program.hpp"
 #include "reciprocal.h"
+#include "bytecode_machine.hpp"
 #include "virtual_memory.h"
 #include "soft_aes.h"
 #include "cpu.hpp"
@@ -194,11 +196,12 @@ namespace randomx {
 	const int32_t codeSshPrefetchSize = codeShhEnd - codeShhPrefetch;
 	const int32_t codeSshInitSize = codeProgramEnd - codeShhInit;
 
-	const int32_t epilogueOffset = CodeSize - epilogueSize;
+	const int32_t defaultEpilogueOffset = CodeSize - epilogueSize;
 	// The program reserve leaves room for four immutable rounding controls.
 	constexpr int32_t roundingTableOffset = RandomXCodeSize - 64;
 	constexpr uint32_t reciprocalCapacity = 16;
 	constexpr int32_t reciprocalTableOffset = roundingTableOffset - reciprocalCapacity * sizeof(uint64_t);
+	const int32_t compactEpilogueOffset = reciprocalTableOffset - epilogueSize;
 
 	static const uint8_t REX_ADD_RR[] = { 0x4d, 0x03 };
 	static const uint8_t REX_ADD_RM[] = { 0x4c, 0x03 };
@@ -291,7 +294,7 @@ namespace randomx {
 	static const uint8_t* NOPX[] = { NOP1, NOP2, NOP3, NOP4, NOP5, NOP6, NOP7, NOP8 };
 
 	size_t JitCompilerX86::getCodeSize() {
-		return CodeSize;
+		return codeSize;
 	}
 
 	void JitCompilerX86::alignCode(int align) {
@@ -304,7 +307,17 @@ namespace randomx {
 		}
 	}
 
-	JitCompilerX86::JitCompilerX86() {
+	JitCompilerX86::JitCompilerX86(bool fullMemoryOnly)
+		: codeSize(fullMemoryOnly ? RandomXCodeSize : CodeSize)
+		, epilogueOffset(fullMemoryOnly ? compactEpilogueOffset : defaultEpilogueOffset) {
+		// Bound all full-VM templates, including v2 software AES and reciprocal
+		// setup. 256 bytes cover generated address mixing, prefetch and jumps.
+		const size_t fullOverhead = prologueSize + reciprocalCapacity * 12 + loopLoadSize +
+			std::max(readDatasetSize, readDatasetV2Size) +
+			std::max(loopStoreSize, std::max(loopStoreHardAesSize, loopStoreSoftAesSize)) +
+			softAesSize + 256;
+		if (fullMemoryOnly && fullOverhead + MaxRandomXProgramCodeSize > size_t(epilogueOffset))
+			throw std::length_error("compact JIT code reserve is too small");
 #if defined(__GNUC__) || defined(__clang__)
 		hasBmi2 = cpu.hasBmi2();
 #if defined(__APPLE__)
@@ -314,7 +327,7 @@ namespace randomx {
 #endif
 #endif
 		prefetchMode = rxm_get_prefetch_mode();
-		code = (uint8_t*)allocJitMemory(CodeSize, &mappedSize);
+		code = (uint8_t*)allocJitMemory(codeSize, &mappedSize);
 		if (code == nullptr)
 			throw std::runtime_error("allocMemoryPages");
 		memcpy(code, codePrologue, prologueSize);
@@ -356,6 +369,7 @@ namespace randomx {
 	}
 
 	void JitCompilerX86::generateProgramLight(Program& prog, ProgramConfiguration& pcfg, uint32_t datasetOffset, bool registersNormalized) {
+		if (codeSize != CodeSize) throw std::logic_error("full-memory JIT cannot compile a light VM");
 		generateProgramPrologue(prog, pcfg, registersNormalized);
 		if (vmFlags & RANDOMX_FLAG_V2) {
 			emit(codeReadDatasetLightSshInitV2, readDatasetLightInitV2Size);
@@ -372,6 +386,7 @@ namespace randomx {
 	}
 
 	void JitCompilerX86::generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t> &reciprocalCache) {
+		if (codeSize != CodeSize) throw std::logic_error("full-memory JIT has no superscalar area");
 		memcpy(code + superScalarHashOffset, codeShhInit, codeSshInitSize);
 		codePos = superScalarHashOffset + codeSshInitSize;
 		for (unsigned j = 0; j < programs.size(); ++j) {
@@ -394,10 +409,12 @@ namespace randomx {
 	}
 
 	void JitCompilerX86::generateDatasetInitCode() {
+		if (codeSize != CodeSize) throw std::logic_error("full-memory JIT has no dataset initializer area");
 		memcpy(code, codeDatasetInit, datasetInitSize);
 	}
 
 	void JitCompilerX86::generateProgramPrologue(Program& prog, ProgramConfiguration& pcfg, bool registersNormalized) {
+		currentProgram = &prog;
 		reciprocalCount = 0;
 		for (unsigned i = 0; i < RegistersCount; ++i) {
 			registerUsage[i] = -1;
@@ -999,6 +1016,18 @@ namespace randomx {
 	}
 
 	void JitCompilerX86::h_CFROUND(Instruction& instr, int i) {
+		if (!(vmFlags & RANDOMX_FLAG_V2)) {
+			// A later unconditional CFROUND makes this update unobservable if
+			// no intervening operation uses rounding or changes control flow.
+			// Do not cross the loop boundary: the final mode feeds the next loop
+			// and the next program. v2 CFROUND is conditional and cannot kill a set.
+			for (unsigned next = i + 1, n = currentProgram->getSize(vmFlags); next < n; ++next) {
+				const auto opcode = (*currentProgram)(next).opcode;
+				if (opcode >= ceil_CBRANCH && opcode < ceil_CFROUND) return;
+				if ((opcode >= ceil_FSWAP_R && opcode < ceil_FSUB_M) ||
+					(opcode >= ceil_FSCAL_R && opcode < ceil_CBRANCH)) break;
+			}
+		}
 		InstructionEmitter output(code, codePos);
 		if (tuneRounding && !(vmFlags & RANDOMX_FLAG_V2)) {
 			// Select an immutable MXCSR value. Avoid the store-to-load dependency

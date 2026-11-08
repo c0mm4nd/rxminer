@@ -63,8 +63,12 @@ static Program makeProgram(unsigned kind, uint64_t seed) {
 }
 
 int main(int argc, char** argv) {
-    const bool normalized = argc == 2 && std::strcmp(argv[1], "--normalized") == 0;
-    if (argc != 1 && !normalized) return 4;
+    bool normalized = false, compact = false;
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--normalized")) normalized = true;
+        else if (!std::strcmp(argv[i], "--compact")) compact = true;
+        else return 4;
+    }
     if (!(randomx_get_flags() & RANDOMX_FLAG_HARD_AES)) {
         std::puts("SKIPPED JIT state regression: hardware AES unavailable");
         return 0;
@@ -74,7 +78,7 @@ int main(int argc, char** argv) {
     void* allocation = nullptr;
     if (posix_memalign(&allocation, 64, ScratchpadSize)) return 3;
     auto* scratch = static_cast<uint8_t*>(allocation);
-    JitCompilerX86 jit;
+    JitCompilerX86 jit(compact);
     const uint32_t savedMxcsr = _mm_getcsr();
     blake2b_state digest;
     blake2b_init(&digest, 32);
