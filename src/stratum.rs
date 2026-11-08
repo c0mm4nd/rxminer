@@ -1,10 +1,7 @@
 use crate::{config::PoolOptions, control::Control, job::Job, proxy};
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
-use openssl::{
-    hash::MessageDigest,
-    ssl::{HandshakeError, SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion},
-};
+use rustls::{pki_types::ServerName, ClientConnection, StreamOwned};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -208,7 +205,7 @@ impl Drop for Client {
 
 enum Transport {
     Tcp(TcpStream),
-    Tls(SslStream<TcpStream>),
+    Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
 }
 impl Read for Transport {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
@@ -253,69 +250,41 @@ impl Transport {
             }
             return Ok(Self::Tcp(tcp));
         }
-        let mut connector = SslConnector::builder(SslMethod::tls_client())?;
-        connector.set_min_proto_version(Some(SslVersion::TLS1_2))?;
-        connector.set_verify(if options.tls.verify {
-            SslVerifyMode::PEER
-        } else {
-            SslVerifyMode::NONE
-        });
-        if !options.tls.ca.is_empty() {
-            connector
-                .set_ca_file(&options.tls.ca)
-                .context("load TLS CA")?;
-        }
-        let mut ssl = connector.build().configure()?;
-        ssl.set_verify_hostname(options.tls.verify);
-        // Resume the same TLS state after WouldBlock. Polling avoids relying
-        // on cross-thread shutdown to wake a blocking read on every OS.
-        tcp.set_nonblocking(true)?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut handshake = ssl.connect(&options.address.host, tcp);
-        let stream = loop {
-            ensure!(
-                !stop.stopped() && !control.stopped(),
-                "TLS handshake interrupted"
-            );
-            match handshake {
-                Ok(stream) => break stream,
-                Err(HandshakeError::WouldBlock(pending)) => {
-                    ensure!(Instant::now() < deadline, "TLS handshake timed out");
-                    thread::sleep(Duration::from_millis(10));
-                    handshake = pending.handshake();
-                }
-                Err(error) => return Err(error).context("TLS handshake"),
-            }
-        };
-        stream.get_ref().set_nonblocking(false)?;
-        if !options.tls.fingerprint.is_empty() {
-            let cert = stream
-                .ssl()
-                .peer_certificate()
-                .context("pool did not present a certificate")?;
-            let digest = cert.digest(MessageDigest::sha256())?;
-            ensure!(
-                hex::encode(digest) == options.tls.fingerprint,
-                "TLS certificate fingerprint mismatch"
-            );
-        }
+        let config = crate::tls::client_config(&options.tls)?;
+        let name = ServerName::try_from(options.address.host.clone())
+            .context("invalid TLS server name")?;
+        let mut stream = StreamOwned::new(ClientConnection::new(config, name)?, tcp);
+        stream.sock.set_nonblocking(true)?;
+        crate::tls::handshake(
+            || {
+                stream.conn.complete_io(&mut stream.sock)?;
+                Ok(!stream.conn.is_handshaking() && !stream.conn.wants_write())
+            },
+            || stop.stopped() || control.stopped(),
+            Duration::from_secs(5),
+        )?;
+        stream.sock.set_nonblocking(false)?;
         stream
-            .get_ref()
+            .sock
             .set_read_timeout(Some(Duration::from_millis(100)))?;
         if !dev {
             crate::status!(
-                "[net] TLS connected to {} ({})",
+                "[net] TLS connected to {} ({:?})",
                 options.address.authority(),
-                stream.ssl().version_str()
+                stream
+                    .conn
+                    .protocol_version()
+                    .context("TLS version not negotiated")?
             );
         }
-        Ok(Self::Tls(stream))
+        Ok(Self::Tls(Box::new(stream)))
     }
 
     fn send(&mut self, value: Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(&value)?;
         bytes.push(b'\n');
-        self.write_all(&bytes).context("write Stratum request")
+        self.write_all(&bytes).context("write Stratum request")?;
+        self.flush().context("flush Stratum request")
     }
 }
 

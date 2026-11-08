@@ -97,6 +97,11 @@ fn guarded(command: &mut Command, guard: &Path, guard_log: &Path) -> Result<()> 
         .env("RXMINER_BUILD_GUARD_LOG", guard_log)
         .env("CMAKE", guard.join("cmake"))
         .env("MAKE", guard.join("make"))
+        // A host with OpenSSL installed must not hide a TLS build dependency.
+        .env("OPENSSL_DIR", guard.join("no-openssl"))
+        .env("OPENSSL_LIB_DIR", guard.join("no-openssl/lib"))
+        .env("OPENSSL_INCLUDE_DIR", guard.join("no-openssl/include"))
+        .env("OPENSSL_NO_VENDOR", "1")
         .env_remove("RXMINER_ARCH")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
@@ -104,6 +109,15 @@ fn guarded(command: &mut Command, guard: &Path, guard_log: &Path) -> Result<()> 
 }
 
 fn check_installed(binary: &Path, temp: &Path) -> Result<()> {
+    let libraries = run(
+        Command::new("ldd").arg(binary),
+        temp.join("dependencies.log"),
+        10,
+    )?;
+    ensure!(
+        !libraries.contains("libssl.") && !libraries.contains("libcrypto."),
+        "installed binary still links OpenSSL: {libraries}"
+    );
     for flag in ["--version", "--help"] {
         run(
             Command::new(binary).arg(flag).current_dir(temp),
@@ -149,7 +163,16 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
     fs::create_dir(&guard)?;
     let guard_log = temp.0.join("unexpected-tool.log");
     for tool in [
-        "cmake", "cmake3", "ccmake", "make", "gmake", "ninja", "python", "python3",
+        "cmake",
+        "cmake3",
+        "ccmake",
+        "make",
+        "gmake",
+        "ninja",
+        "python",
+        "python3",
+        "openssl",
+        "pkg-config",
     ] {
         let path = guard.join(tool);
         fs::write(
@@ -258,6 +281,6 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         "installation invoked a blocked tool: {}",
         fs::read_to_string(&guard_log).unwrap_or_default()
     );
-    println!("PASS: package, local/Git install and hashing without Python, CMake, Make or Ninja");
+    println!("PASS: package, local/Git install and hashing without Python, CMake, Make, Ninja or OpenSSL");
     Ok(())
 }

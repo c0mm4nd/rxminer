@@ -538,8 +538,9 @@ impl FeeSchedule {
         let (fraction, cycle) = (0.009, 5.0);
         #[cfg(not(feature = "test-dev-fee"))]
         let (fraction, cycle) = {
+            use anyhow::Context as _;
             let mut random = [0u8; 8];
-            openssl::rand::rand_bytes(&mut random)?;
+            getrandom::fill(&mut random).context("get OS randomness")?;
             // 53 random bits give a value in [0, 1), then convert percent to fraction.
             (
                 (u64::from_le_bytes(random) >> 11) as f64 / (1u64 << 53) as f64 / 100.0,

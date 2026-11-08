@@ -2,7 +2,7 @@
 
 See [platform support](PLATFORMS.md) for verified targets and remaining differences.
 Development requires Rust 1.88 or newer, Cargo,
-a native C/C++ toolchain and OpenSSL development libraries; see the
+a native C/C++ toolchain for RandomX; see the
 platform-specific dependencies above. The native
 RandomX implementation is built by Cargo; CMake, Make, Ninja and Python are
 not required for the build or regression suite.
@@ -51,7 +51,7 @@ cargo test --locked --release --features test-dev-fee --test network --target-di
 
 These Linux x86-64 tests require `taskset` (from `util-linux`) and at least 4 GiB of free
 memory. They use Rust fixtures bound to loopback, generate temporary TLS
-certificates through the OpenSSL library, and never connect to public pools.
+certificates through rcgen and use rustls for TLS, and never connect to public pools.
 
 Coverage includes TLS and certificate rejection, HTTP CONNECT and SOCKS5,
 share submission, nonce continuity, connection failure, pool failover,
@@ -75,8 +75,10 @@ cargo test --locked --release --test tooling cargo_install_without_external_buil
 This Linux x86-64 check also requires Git and `taskset`. It verifies `cargo package`, fresh
 local-source and temporary Git installations, and actual hashing by each
 installed binary. Each build uses a clean target directory, two compilation
-jobs and portable defaults. Python, CMake, Make and Ninja are blocked for
-child build processes. The temporary Git repository contains the packaged
+jobs and portable defaults. Python, CMake, Make, Ninja, OpenSSL and pkg-config
+executables are blocked for child build processes, OpenSSL paths are deliberately
+invalid, and installed binaries are checked for OpenSSL runtime dependencies.
+The temporary Git repository contains the packaged
 source file set and is never pushed to a remote.
 
 ## CI

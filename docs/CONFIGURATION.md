@@ -154,8 +154,26 @@ they do not implement the entire external API schema.
 
 Root `tls` accepts `enabled`, `cert`, `cert_key`, `protocols`, `ciphers`,
 `ciphersuites`, and `dhparam`. Certificates and keys use PEM. Allowed protocols
-are `TLSv1.2` and/or `TLSv1.3`, separated by spaces. API requests have bounded
-headers, bodies and read deadlines; ambiguous framing is rejected.
+are `TLSv1.2` and/or `TLSv1.3`, separated by spaces. TLS is provided by rustls.
+Keys must be unencrypted PKCS#8, PKCS#1 (RSA), or SEC1 (EC) PEM keys matching
+the leaf certificate; certificate chains are leaf-first.
+
+`ciphers` selects TLS 1.2 suites with colon-separated explicit IANA names or
+OpenSSL-style ECDHE names, such as `ECDHE-RSA-AES128-GCM-SHA256`.
+Supported suites use ECDHE with RSA or ECDSA authentication and AES-128-GCM,
+AES-256-GCM or ChaCha20-Poly1305. `ciphersuites` selects TLS 1.3 suites from
+`TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` and
+`TLS_CHACHA20_POLY1305_SHA256`, also separated by colons. Omit these fields
+to use provider defaults. OpenSSL cipher expressions such as `HIGH:!aNULL`
+are rejected. Custom finite-field `dhparam` is unsupported and must be omitted
+or null; key exchange uses the provider's ECDHE groups.
+
+Client verification uses the platform root store (`SSL_CERT_FILE` and
+`SSL_CERT_DIR` override native loading), plus any `--tls-ca` bundle. A configured
+fingerprint must match the leaf certificate even when CA/hostname validation
+is also enabled. All modes verify TLS handshake signatures.
+API requests have bounded headers, bodies and read deadlines; ambiguous framing
+is rejected. TLS handshakes are cancellable and have an overall deadline.
 
 ## Offline benchmarks
 

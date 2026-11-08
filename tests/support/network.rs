@@ -1,18 +1,11 @@
 use crate::support::{wait_until, Process};
 use anyhow::{bail, ensure, Context, Result};
-use openssl::{
-    asn1::Asn1Time,
-    bn::BigNum,
-    hash::MessageDigest,
-    pkey::PKey,
-    rsa::Rsa,
-    ssl::{SslAcceptor, SslConnector, SslMethod, SslVersion},
-    x509::{
-        extension::{BasicConstraints, SubjectAlternativeName},
-        X509NameBuilder, X509,
-    },
+use rustls::{
+    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
+    ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -34,44 +27,30 @@ pub struct Certificate {
 }
 impl Certificate {
     pub fn new(directory: &Path) -> Result<Self> {
-        let key = PKey::from_rsa(Rsa::generate(2048)?)?;
-        let mut name = X509NameBuilder::new()?;
-        name.append_entry_by_text("CN", "localhost")?;
-        let name = name.build();
-        let mut cert = X509::builder()?;
-        cert.set_version(2)?;
-        cert.set_serial_number(BigNum::from_u32(1)?.to_asn1_integer()?.as_ref())?;
-        cert.set_subject_name(&name)?;
-        cert.set_issuer_name(&name)?;
-        cert.set_pubkey(&key)?;
-        cert.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-        cert.set_not_after(Asn1Time::days_from_now(2)?.as_ref())?;
-        cert.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-        let san = SubjectAlternativeName::new()
-            .dns("localhost")
-            .ip("127.0.0.1")
-            .build(&cert.x509v3_context(None, None))?;
-        cert.append_extension(san)?;
-        cert.sign(&key, MessageDigest::sha256())?;
-        let cert = cert.build();
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])?;
         let result = Self {
             cert: directory.join("pool.crt"),
             key: directory.join("pool.key"),
-            fingerprint: hex::encode(cert.digest(MessageDigest::sha256())?),
+            fingerprint: hex::encode(Sha256::digest(cert.der().as_ref())),
         };
-        fs::write(&result.cert, cert.to_pem()?)?;
-        fs::write(&result.key, key.private_key_to_pem_pkcs8()?)?;
+        fs::write(&result.cert, cert.pem())?;
+        fs::write(&result.key, signing_key.serialize_pem())?;
         fs::set_permissions(&result.key, fs::Permissions::from_mode(0o600))?;
         Ok(result)
     }
 
-    fn acceptor(&self) -> Result<SslAcceptor> {
-        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-        builder.set_min_proto_version(Some(SslVersion::TLS1_2))?;
-        builder.set_certificate(X509::from_pem(&fs::read(&self.cert)?)?.as_ref())?;
-        builder.set_private_key(PKey::private_key_from_pem(&fs::read(&self.key)?)?.as_ref())?;
-        builder.check_private_key()?;
-        Ok(builder.build())
+    fn acceptor(&self) -> Result<Arc<ServerConfig>> {
+        Ok(Arc::new(
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()?
+                .with_no_client_auth()
+                .with_single_cert(
+                    CertificateDer::pem_file_iter(&self.cert)?
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                    PrivateKeyDer::from_pem_file(&self.key)?,
+                )?,
+        ))
     }
 }
 
@@ -85,6 +64,7 @@ struct Connections {
 }
 impl Connections {
     fn register(&self, socket: &TcpStream) -> Result<()> {
+        socket.set_nonblocking(false)?;
         socket.set_read_timeout(Some(Duration::from_secs(60)))?;
         socket.set_write_timeout(Some(Duration::from_secs(10)))?;
         let mut sockets = self.sockets.lock().unwrap();
@@ -207,7 +187,10 @@ impl Pool {
         let shared = state.clone();
         let server = Server::new(move |socket, _| {
             let connection: Box<dyn Stream> = match &acceptor {
-                Some(tls) => Box::new(tls.accept(socket)?),
+                Some(tls) => Box::new(StreamOwned::new(
+                    ServerConnection::new(tls.clone())?,
+                    socket,
+                )),
                 None => Box::new(socket),
             };
             let mut connection = BufReader::new(connection);
@@ -393,9 +376,20 @@ impl Api {
         socket.set_read_timeout(Some(Duration::from_secs(3)))?;
         socket.set_write_timeout(Some(Duration::from_secs(3)))?;
         let mut stream: Box<dyn Stream> = if let Some(cert) = &self.certificate {
-            let mut tls = SslConnector::builder(SslMethod::tls())?;
-            tls.set_ca_file(cert)?;
-            Box::new(tls.build().connect("localhost", socket)?)
+            let mut roots = RootCertStore::empty();
+            for cert in CertificateDer::pem_file_iter(cert)? {
+                roots.add(cert?)?;
+            }
+            let config = ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            Box::new(StreamOwned::new(
+                ClientConnection::new(Arc::new(config), "localhost".try_into()?)?,
+                socket,
+            ))
         } else {
             Box::new(socket)
         };

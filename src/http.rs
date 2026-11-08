@@ -24,47 +24,8 @@ pub struct TlsOptions {
     pub dhparam: Option<String>,
 }
 impl TlsOptions {
-    pub fn acceptor(&self) -> Result<Option<openssl::ssl::SslAcceptor>> {
-        use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVersion};
-        if !self.enabled {
-            return Ok(None);
-        }
-        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server())?;
-        builder.set_min_proto_version(Some(SslVersion::TLS1_2))?;
-        if let Some(protocols) = &self.protocols {
-            let versions: Vec<_> = protocols.split_whitespace().collect();
-            anyhow::ensure!(
-                !versions.is_empty()
-                    && versions.iter().all(|v| matches!(*v, "TLSv1.2" | "TLSv1.3")),
-                "API TLS protocols must be TLSv1.2 and/or TLSv1.3"
-            );
-            if !versions.contains(&"TLSv1.2") {
-                builder.set_min_proto_version(Some(SslVersion::TLS1_3))?;
-            }
-            if !versions.contains(&"TLSv1.3") {
-                builder.set_max_proto_version(Some(SslVersion::TLS1_2))?;
-            }
-        }
-        builder
-            .set_certificate_chain_file(self.cert.as_deref().context("tls.cert is required")?)?;
-        builder.set_private_key_file(
-            self.cert_key
-                .as_deref()
-                .context("tls.cert_key is required")?,
-            SslFiletype::PEM,
-        )?;
-        builder.check_private_key()?;
-        if let Some(ciphers) = &self.ciphers {
-            builder.set_cipher_list(ciphers)?;
-        }
-        if let Some(suites) = &self.ciphersuites {
-            builder.set_ciphersuites(suites)?;
-        }
-        if let Some(path) = &self.dhparam {
-            let params = openssl::dh::Dh::params_from_pem(&std::fs::read(path)?)?;
-            builder.set_tmp_dh(&params)?;
-        }
-        Ok(Some(builder.build()))
+    pub fn acceptor(&self) -> Result<Option<Arc<rustls::ServerConfig>>> {
+        crate::tls::server_config(self)
     }
 }
 
@@ -117,7 +78,7 @@ impl Server {
         host: &str,
         port: u16,
         token: Option<String>,
-        acceptor: Option<openssl::ssl::SslAcceptor>,
+        acceptor: Option<Arc<rustls::ServerConfig>>,
         handler: RequestHandler,
         control: Control,
     ) -> Result<Self> {
@@ -134,9 +95,11 @@ impl Server {
                 while !thread_stop.load(Ordering::Relaxed) && !control.stopped() {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
-                            if stream
-                                .set_read_timeout(Some(Duration::from_millis(200)))
-                                .is_err()
+                            // Accepted sockets may inherit nonblocking mode.
+                            if stream.set_nonblocking(false).is_err()
+                                || stream
+                                    .set_read_timeout(Some(Duration::from_millis(200)))
+                                    .is_err()
                                 || stream
                                     .set_write_timeout(Some(Duration::from_millis(500)))
                                     .is_err()
@@ -144,9 +107,27 @@ impl Server {
                                 continue;
                             }
                             if let Some(acceptor) = &acceptor {
-                                if let Ok(mut tls) = acceptor.accept(stream) {
+                                let Ok(conn) = rustls::ServerConnection::new(acceptor.clone())
+                                else {
+                                    continue;
+                                };
+                                let mut tls = rustls::StreamOwned::new(conn, stream);
+                                if tls.sock.set_nonblocking(true).is_err() {
+                                    continue;
+                                }
+                                let handshake = crate::tls::handshake(
+                                    || {
+                                        tls.conn.complete_io(&mut tls.sock)?;
+                                        Ok(!tls.conn.is_handshaking() && !tls.conn.wants_write())
+                                    },
+                                    || thread_stop.load(Ordering::Relaxed) || control.stopped(),
+                                    Duration::from_secs(2),
+                                );
+                                if handshake.is_ok() && tls.sock.set_nonblocking(false).is_ok() {
                                     let _ =
                                         serve(&mut tls, &handler, &thread_stop, token.as_deref());
+                                    tls.conn.send_close_notify();
+                                    let _ = tls.flush();
                                 }
                             } else {
                                 let _ =
@@ -237,7 +218,10 @@ fn serve(
             .is_some_and(|(scheme, value)| {
                 scheme.eq_ignore_ascii_case("bearer")
                     && value.len() == expected.len()
-                    && openssl::memcmp::eq(value.as_bytes(), expected.as_bytes())
+                    && bool::from(subtle::ConstantTimeEq::ct_eq(
+                        value.as_bytes(),
+                        expected.as_bytes(),
+                    ))
             });
         valid && headers.next().is_none()
     });

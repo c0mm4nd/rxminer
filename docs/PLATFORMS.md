@@ -14,24 +14,21 @@ OS-specific tuning differences are listed separately.
 
 All targets build RandomX directly through Cargo. No submodule checkout,
 build-time source download, CMake, Make, Ninja or Python is used by the miner
-build. A native C/C++ toolchain and OpenSSL development libraries are required.
+build. A native C/C++ toolchain is required for RandomX.
+TLS uses rustls with the ring crypto provider; OpenSSL headers, libraries,
+DLLs and environment variables are no longer needed. ring includes native
+C/assembly cryptographic kernels built by Cargo.
 
 ## Dependencies
 
-- Linux: GCC or Clang, `pkg-config`, and OpenSSL headers (`libssl-dev` on Ubuntu).
-- macOS: Xcode Command Line Tools, `brew install openssl@3 pkg-config`, and
-  `OPENSSL_DIR="$(brew --prefix openssl@3)"` when installing with Cargo.
-- Windows: Rust's MSVC toolchain, Visual Studio C++ Build Tools with the x64
-  assembler, and OpenSSL headers and x64 libraries matching the CRT. With a
-  full precompiled OpenSSL installation, set `OPENSSL_DIR` to its root,
-  `OPENSSL_LIB_DIR` to its `lib/VC/x64/MD` directory, and `OPENSSL_STATIC=0`.
-  Add its `bin` directory to `PATH` so the installed miner can load the DLLs.
-  CI validates this installation path. A matching vcpkg installation is also
-  supported by the OpenSSL dependency's discovery mechanism.
+- Linux: GCC or Clang (`gcc g++` on Debian/Ubuntu).
+- macOS: Xcode Command Line Tools.
+- Windows: Rust's MSVC toolchain and Visual Studio C++ Build Tools with the
+  x64 assembler. No separate TLS development libraries are required.
 
 The Git installation command in the [README](../README.md#installation) is the
 same on each OS after installing its dependencies. Cross-compilation requires
-a suitable target compiler, assembler, linker and OpenSSL installation;
+a suitable target compiler, assembler and linker;
 `RXMINER_ARCH=native` is only accepted for native builds.
 
 ## Current differences
@@ -68,18 +65,22 @@ macOS Intel and Apple Silicon, and Windows x64 archives on their native runners.
 Each archive is extracted and checked for its version and a short offline mining
 run before upload. SHA-256 checksums accompany every archive.
 
-Linux packages are built on Ubuntu 24.04 and require a compatible glibc environment,
-OpenSSL 3 and the C++ runtime. macOS packages statically link OpenSSL and require
-macOS 15 or newer; they are ad-hoc signed, not Apple-notarized. Windows packages
-include the OpenSSL and Visual C++ runtime DLLs and target Windows 10/Server 2022
-or newer. Keep these DLLs beside `rxminer.exe` when moving the program.
+Linux packages are built on Ubuntu 24.04 and require a compatible glibc environment
+and the C++ runtime. macOS packages require macOS 15 or newer and are ad-hoc
+signed, not Apple-notarized. Windows packages include the Visual C++ runtime
+DLLs and target Windows 10/Server 2022 or newer. Keep these DLLs beside
+`rxminer.exe` when moving the program. No platform package links or bundles
+OpenSSL.
 
-For TLS certificate verification on systems without an OpenSSL default CA bundle,
-provide `--tls-ca` or `SSL_CERT_FILE` pointing to your trusted CA bundle. Certificate
-fingerprint verification remains available with `--tls-fingerprint`.
+Verified TLS connections use the platform certificate store through
+rustls-native-certs. `SSL_CERT_FILE` and `SSL_CERT_DIR` override native root
+loading; `--tls-ca` adds a PEM trust bundle. Certificate fingerprint verification
+remains available with `--tls-fingerprint` and is also enforced when CA
+verification is enabled. The transitive `openssl-probe` crate only discovers
+Unix certificate paths; it does not link OpenSSL.
 
-The normal Cargo build continues to use system OpenSSL and needs no additional
-packaging tools. RISC-V release validation is queued once after the other package
+The normal Cargo build needs no separate TLS installation.
+RISC-V release validation is queued once after the other package
 jobs pass; the complete batch also produces the RISC-V archive.
 
 ## RISC-V bring-up

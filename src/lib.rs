@@ -9,6 +9,7 @@ pub mod miner;
 pub mod proxy;
 pub mod randomx;
 pub mod stratum;
+mod tls;
 #[cfg(target_os = "linux")]
 pub mod topology;
 #[cfg(not(target_os = "linux"))]

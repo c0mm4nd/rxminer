@@ -27,11 +27,11 @@ Details: [platforms](docs/PLATFORMS.md),
 
 ## Build
 
-Requires Rust 1.88+, a C/C++ toolchain and OpenSSL headers
+Requires Rust 1.88+ and a C/C++ toolchain for RandomX
 ([per-platform](docs/PLATFORMS.md#dependencies)).
 
 ```bash
-sudo apt-get install -y gcc g++ pkg-config libssl-dev   # Debian/Ubuntu
+sudo apt-get install -y gcc g++   # Debian/Ubuntu
 
 cargo install --git https://github.com/c0mm4nd/rxminer.git --locked --bin rxminer
 # or, from a checkout:

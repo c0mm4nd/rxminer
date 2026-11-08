@@ -27,14 +27,14 @@ runs:
         mkdir -p "dist/$name"
         cp "target/release/rxminer${EXE_SUFFIX}" README.md LICENSE Cargo.lock config.example.json "dist/$name/"
         cp src/crypto/randomx/LICENSE "dist/$name/LICENSE-RandomX"
+        cp .github/release/LICENSE-ring .github/release/LICENSE-rustls .github/release/LICENSE-webpki "dist/$name/"
         cp -r docs "dist/$name/"
         echo "PACKAGE_NAME=$name" >> "$GITHUB_ENV"
         echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
-    - name: Check macOS dependencies and license
+    - name: Check macOS dependencies
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        cp .github/release/LICENSE-OpenSSL "dist/$PACKAGE_NAME/"
         otool -L "dist/$PACKAGE_NAME/rxminer" | tee "$RUNNER_TEMP/release-dependencies.txt"
         if grep -E 'lib(ssl|crypto)|/opt/homebrew/|/usr/local/' "$RUNNER_TEMP/release-dependencies.txt"; then
           echo 'Unexpected non-system runtime dependency' >&2
@@ -42,16 +42,11 @@ runs:
         fi
         codesign --force --sign - "dist/$PACKAGE_NAME/rxminer"
         codesign --verify --strict "dist/$PACKAGE_NAME/rxminer"
-    - name: Bundle Windows OpenSSL and Visual C++ runtime
+    - name: Bundle Windows Visual C++ runtime
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
         $destination = Join-Path 'dist' $env:PACKAGE_NAME
-        $openssl = Join-Path $env:ProgramFiles 'OpenSSL'
-        foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll')) {
-          Copy-Item (Join-Path "$openssl/bin" $name) $destination
-        }
-        Copy-Item '.github/release/LICENSE-OpenSSL' $destination
         $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
         $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
         if (!$vs) { throw 'Visual Studio installation not found' }
@@ -82,7 +77,13 @@ runs:
         tar -xzf "dist/$PACKAGE_NAME.tar.gz" -C "$check"
         binary="$check/$PACKAGE_NAME/rxminer"
         test "$("$binary" --version)" = "rxminer $PACKAGE_VERSION"
-        if [[ "$RUNNER_OS" == Linux ]]; then ldd "$binary"; fi
+        if [[ "$RUNNER_OS" == Linux ]]; then
+          ldd "$binary" | tee "$RUNNER_TEMP/release-dependencies.txt"
+          if grep -E 'lib(ssl|crypto)\.' "$RUNNER_TEMP/release-dependencies.txt"; then
+            echo 'Unexpected OpenSSL runtime dependency' >&2
+            exit 1
+          fi
+        fi
         "$binary" --benchmark-seconds 1 --randomx-mode light --threads 1 --no-huge-pages \
           > "$RUNNER_TEMP/release-smoke.log" 2>&1
         cat "$RUNNER_TEMP/release-smoke.log"
