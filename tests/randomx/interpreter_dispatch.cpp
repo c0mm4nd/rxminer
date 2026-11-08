@@ -81,7 +81,8 @@ int main(int argc, char** argv) {
     Buffer initial, scratch, expected;
     uint64_t state = 0x217d7a3bcf965b80ULL;
     for (size_t i = 0; i < ScratchpadSize; i += 8) store64(initial.data + i, next(state));
-    ProgramConfiguration config{};
+    // Match the VM: exponent masks are read with aligned SIMD loads on x86.
+    alignas(16) ProgramConfiguration config{};
     config.eMask[0] = config.eMask[1] = 0x3ff0000000000000ULL;
     unsigned cases = 0;
     for (auto flags : {RANDOMX_FLAG_DEFAULT, RANDOMX_FLAG_V2}) {
