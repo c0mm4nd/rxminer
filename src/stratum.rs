@@ -553,6 +553,9 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 });
                 let socket = socket.unwrap();
+                // Accepted sockets can inherit the listener's nonblocking mode
+                // on macOS/Windows. This fixture uses blocking, bounded reads.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
