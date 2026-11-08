@@ -8,4 +8,5 @@
 
 pub mod blake2b;
 pub mod generator;
+pub mod scheduler;
 pub mod superscalar;

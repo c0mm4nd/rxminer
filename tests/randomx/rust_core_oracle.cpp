@@ -51,7 +51,7 @@ static void emitProgram(randomx::SuperscalarProgram prog, unsigned seed) {
 
 int main(int argc, char** argv) {
     if (argc != 2 || !(output = std::fopen(argv[1], "wb"))) return 1;
-    bytes("RXRUST01", 8);
+    bytes("RXRUST02", 8);
     const unsigned lengths[] = {0, 1, 31, 32, 59, 60, 61, 64, 80, 255};
     const uint32_t nonces[] = {0, 1, UINT32_C(0x80000000), UINT32_MAX};
     u32(10 * 4 * 4);
@@ -87,6 +87,30 @@ int main(int argc, char** argv) {
             instruction.setImm32(op == 4 ? 1 + edge * 20 : op == 13 ? (immediates[edge] | 3) : immediates[edge]);
             emitProgram(prog, edge);
         }
+    // Each cache generates eight programs from one continuous byte stream.
+    // Include boundary seed lengths and nonces, then check the remaining stream
+    // without advancing the generator used for the next program.
+    constexpr unsigned chains = 256;
+    u32(chains);
+    for (unsigned caseId = 0; caseId < chains; ++caseId) {
+        const unsigned length = lengths[caseId % 10];
+        const uint32_t nonce = nonces[(caseId / 10) % 4];
+        uint8_t seed[255];
+        for (unsigned i = 0; i < length; ++i) seed[i] = uint8_t(i * 37 + caseId * 13 + (caseId >> 8));
+        u32(length); bytes(seed, length); u32(nonce); u32(8);
+        randomx::Blake2Generator generator(seed, length, int(nonce));
+        for (unsigned index = 0; index < 8; ++index) {
+            randomx::SuperscalarProgram prog{};
+            randomx::generateSuperscalar(prog, generator);
+            emitProgram(prog, caseId + index);
+            u32(prog.codeSize); u32(prog.macroOps); u32(prog.decodeCycles);
+            u32(prog.cpuLatency); u32(prog.asicLatency); u32(prog.mulCount);
+            for (auto latency : prog.cpuLatencies) u32(latency);
+            for (auto latency : prog.asicLatencies) u32(latency);
+            auto continuation = generator;
+            for (unsigned i = 0; i < 32; ++i) u32(continuation.getUInt32());
+        }
+    }
     if (std::fclose(output) != 0) return 1;
     std::printf("Generated Rust migration oracle: 160 byte streams and %u integer programs\n", generated + crafted);
 }
