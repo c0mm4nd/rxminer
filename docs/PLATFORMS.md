@@ -1,35 +1,44 @@
 # Platform support
 
-CPU mining and Cargo installation are verified on the native CI targets below.
-OS-specific tuning differences are listed separately.
+The default `randomx-rust` feature selects Rust JITs on Linux x86-64/ARM64/RV64, macOS Intel/Apple Silicon,
+and Windows x64. Each emitter implements VM instructions, superscalar code and
+dataset initialization in Rust. The interpreter remains selectable on every
+platform; other architectures default to it.
 
-| Target | Hash backend | Verified runner |
-| --- | --- | --- |
-| Linux x86-64 | Optimized x86-64 JIT | Ubuntu 22.04 and 24.04 |
-| Linux ARM64 | ARM64 JIT | Ubuntu 24.04 ARM64 |
-| macOS Intel | Optimized x86-64 JIT | macOS 15 Intel |
-| macOS Apple Silicon | ARM64 JIT with write/execute protection | macOS 15 ARM64 |
-| Windows x64 (MSVC) | Windows x64 JIT | Windows Server 2022 |
-| Linux RISC-V64 | RV64GC JIT | Ubuntu 24.04 RISE |
-
-All targets build RandomX directly through Cargo. No submodule checkout,
-build-time source download, CMake, Make, Ninja or Python is used by the miner
-build. A native C/C++ toolchain is required for RandomX.
-TLS uses rustls with the ring crypto provider; OpenSSL headers, libraries,
-DLLs and environment variables are no longer needed. ring includes native
-C/assembly cryptographic kernels built by Cargo.
+Linux x86-64 has native differential validation against the retained C++ library.
+ARM64 and RV64 have local QEMU validation of instruction execution, complete
+v1/v2 chains, full/light pipelines and seed replacement. Windows x64 and both
+macOS architectures have cross-compilation checks of the RandomX modules and
+miner adapter; they still need native OS runtime validation. CI workflows check
+each backend feature separately. Consult the GitHub Actions result for the exact
+commit; cross-compilation and historical C++ CI do not validate native execution
+of the current Rust ports or the newly packaged native wrapper.
 
 ## Dependencies
 
-- Linux: GCC or Clang (`gcc g++` on Debian/Ubuntu).
-- macOS: Xcode Command Line Tools.
-- Windows: Rust's MSVC toolchain and Visual Studio C++ Build Tools with the
-  x64 assembler. No separate TLS development libraries are required.
+Rust 1.88+, Cargo, a platform linker and a C toolchain for ring's TLS kernels are
+required. The `randomx-rust` crate has no C/C++ build dependency. Selecting
+`--no-default-features --features randomx-cpp` builds bundled native sources with
+`cc` and also requires a C++ compiler. ring retains its separate transitive `cc`
+dependency in both builds. OpenSSL is not linked.
 
-The Git installation command in the [README](../README.md#installation) is the
-same on each OS after installing its dependencies. Cross-compilation requires
-a suitable target compiler, assembler and linker;
-`RXMINER_ARCH=native` is only accepted for native builds.
+- Linux: GCC or Clang (`gcc` on Debian/Ubuntu).
+- macOS: Xcode Command Line Tools.
+- Windows: Rust MSVC and Visual Studio build tools for the C toolchain/linker.
+
+Default Rust builds need no C++ compiler. Neither backend needs CMake, Make,
+Ninja or Python. Cross builds
+still need the target tools required by ring and Rust linking. Install this
+checkout with `cargo install --path . --locked`. For Git installs, select a
+revision that contains the backend features you intend to build.
+
+## Platform crate
+
+`rx-platform` provides reusable CPU topology, worker selection, affinity,
+priority, NUMA binding and CPU/memory availability queries. The miner keeps
+RandomX-specific replication policy and diagnostic logging in its adapter.
+MSR and battery management remain miner modules. Both RandomX backend features
+use the same platform crate; it introduces no native build dependency.
 
 ## Current differences
 
@@ -50,88 +59,45 @@ logical processors available through `--smt`. Available-memory headroom is
 estimated from free and inactive pages, allowing auto memory mode to choose a
 light cache under memory pressure. Explicit fast mode retains the requested mode.
 
-MSR tuning requires Linux x86-64. Battery monitoring and 1 GiB pages currently
-require Linux. Nondefault JIT prefetch modes require the Unix x86-64 backend.
-Unsupported explicit options fail validation. Huge-page requests retain their
-ordinary-page fallback when allocation is unavailable.
+MSR tuning requires Linux x86-64. AES-NI is available on x86-64 and ARMv8 AES on
+ARM64, including interpreter mode. SSSE3 and AVX2 Argon2 are runtime-selected on
+x86-64; other architectures use scalar Argon2. Reserved page requests fall back
+when unavailable. Linux implements 2 MiB/1 GiB mappings and explicit THP advice;
+Windows and macOS implement their supported large-page allocation APIs.
 
-GPU mining and other algorithms are not part of this port. Windows ARM64 has
-not been validated. See below for RISC-V validation.
+The x86-64 JIT exposes all four scratchpad prefetch modes. Linux x86-64/ARM64
+normally use separate RW/RX aliases, with a single-mapping secure option. RV64
+uses a single RW/RX mapping plus process-wide instruction-cache synchronization
+for reliable code replacement, including under QEMU. Windows uses VirtualProtect
+and FlushInstructionCache. Apple Silicon uses MAP_JIT, pthread JIT write
+protection and instruction-cache invalidation. Scratchpad pools are keyed by
+NUMA node and actual page type on all platforms.
 
-## Release archives
+GPU mining, other algorithms and Windows ARM64 validation remain outside scope.
 
-Starting with v0.1.1, GitHub Actions builds Linux x86-64, ARM64 and RISC-V64,
-macOS Intel and Apple Silicon, and Windows x64 archives on their native runners.
-Each archive is extracted and checked for its version and a short offline mining
-run before upload. SHA-256 checksums accompany every archive.
+## Packaging and TLS
 
-Linux packages are built on Ubuntu 24.04 and require a compatible glibc environment
-and the C++ runtime. macOS packages require macOS 15 or newer and are ad-hoc
-signed, not Apple-notarized. Windows packages include the Visual C++ runtime
-DLLs and target Windows 10/Server 2022 or newer. Keep these DLLs beside
-`rxminer.exe` when moving the program. No platform package links or bundles
-OpenSSL.
+Local workflow definitions target Linux x86-64, ARM64 and RV64, macOS Intel and
+Apple Silicon, and Windows x64. Release packaging currently selects the default
+Rust feature: those Linux binaries must not link libstdc++, OpenSSL or libcrypto.
+C++ feature builds may link the platform C++ runtime. Windows packaging retains the Visual Studio runtime bundle until
+its dependencies can be checked on Windows. macOS packages are ad-hoc signed.
+None of these updated migration packages has been published.
 
-Verified TLS connections use the platform certificate store through
-rustls-native-certs. `SSL_CERT_FILE` and `SSL_CERT_DIR` override native root
-loading; `--tls-ca` adds a PEM trust bundle. Certificate fingerprint verification
-remains available with `--tls-fingerprint` and is also enforced when CA
-verification is enabled. The transitive `openssl-probe` crate only discovers
-Unix certificate paths; it does not link OpenSSL.
+TLS uses rustls with ring and platform roots from rustls-native-certs.
+`SSL_CERT_FILE` and `SSL_CERT_DIR` override native root loading; `--tls-ca`
+adds a PEM bundle. `--tls-fingerprint` is enforced even when CA verification is
+also enabled. The transitive `openssl-probe` crate discovers certificate paths;
+it does not link OpenSSL.
 
-The normal Cargo build needs no separate TLS installation.
-RISC-V release validation is queued once after the other package
-jobs pass; the complete batch also produces the RISC-V archive.
+## Historical native validation
 
-## RISC-V bring-up
+The C++ backend passed the [six-job native CI run](https://github.com/c0mm4nd/rxminer/actions/runs/42283459720).
+The RV64GC JIT passed the [RISC-V validation batch](https://github.com/c0mm4nd/rxminer/actions/runs/42358525166).
+Those results cover the previous implementation. C++ remains only as an optional
+Linux x86-64 reference build in the full checkout; see [development](DEVELOPMENT.md).
 
-The separate [RISC-V native regression workflow](../.github/workflows/riscv.yml)
-uses RISE's `ubuntu-24.04-riscv` runner. The initial interpreter baseline passed
-[native compilation, known hashes, CLI configuration, Cargo installation and light-mode mining](https://github.com/c0mm4nd/rxminer/actions/runs/42351301309).
-The scalar RV64GC JIT and compiled dataset initializer passed the
-[complete native validation batch](https://github.com/c0mm4nd/rxminer/actions/runs/42358525166),
-including secure JIT, full-memory mining, concurrent worker lifecycle checks and
-Cargo installation. Vector/crypto acceleration is not integrated.
-
-For a personal repository, install the
-[RISE personal-account GitHub App](https://github.com/apps/rise-risc-v-runners-personal)
-and grant access only to the intended repository. The service requires repository
-Administration read/write to register ephemeral runners, plus Metadata read;
-see the [provider's installation guide](https://riscv-runners.riseproject.dev/docs/getting-started/install.html).
-Once installed, open Actions, select **RISC-V native regression**, and use
-**Run workflow** on `main`. A maintainer can also run:
-
-```bash
-gh workflow run riscv.yml --ref main
-```
-
-The workflow checks native compilation, a known RandomX hash, pipelined hashing,
-concurrent interpreter/JIT/secure-JIT agreement, shared-cache VM recreation,
-full-dataset/light-mode agreement, CLI configuration, Cargo installation and
-positive offline light-mode hash counts. It also runs the portable native vector
-suite, full-memory share checks across job/seed changes, and worker-failure cleanup.
-It uses no pool connection. Dispatch once after a batch of changes passes the
-regular platform matrix: pushes and pull requests do not enqueue RISE jobs.
-An in-progress run is not cancelled by new commits or dispatches. Independent
-checks continue after a failure, with a final failing result if any check failed;
-step summaries and logs are retained in the run artifacts. Performance and
-instruction-extension coverage require further testing.
-
-## Validation
-
-The verified platform targets above run Rust checks, known hash vectors, JIT/interpreter
-agreement, full-memory and light-mode mining, and local Cargo installation.
-Full-memory shares are checked against the light interpreter across concurrent
-job updates and seed changes. Worker startup failures
-and panics must stop the other workers and clear shared state.
-Native checks compare full-capacity and active-length AES program generation,
-including seed preservation and untouched buffer tails. On x86-64 and ARM64,
-they also compare machine code from raw and fused-normalized programs across
-v1/v2 and memory-mode switches. The Linux x86-64 jobs additionally run the native differential suite,
-local pool/proxy/runtime regressions and fresh Git-install checks.
-
-The initial port passed all six jobs in the
-[native CI run](https://github.com/c0mm4nd/rxminer/actions/runs/42283459720).
-
-Hosted runners validate functional behavior. They do not establish comparable
-mining performance or guarantee privileged huge-page/MSR availability.
+The RISC-V workflow still queues only on explicit dispatch or a release batch.
+Do not dispatch migration workflows or publish migration commits without a new
+publication request. Hosted-runner checks establish functional behavior, not
+comparable mining performance or privileged page/MSR availability.
