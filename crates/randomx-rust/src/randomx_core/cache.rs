@@ -265,7 +265,7 @@ fn fill_block_into(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(unix, windows), target_arch = "x86_64"))]
 pub(crate) fn fill_block(
     previous: &[u64; 128],
     reference: &[u64; 128],

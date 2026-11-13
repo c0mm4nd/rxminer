@@ -50,7 +50,7 @@ fn instruction_differential() {
         for v2 in [false, true] {
             let size = 128 + if v2 { 384 * 8 } else { 256 * 8 };
             let mut program = vec![0; size];
-            for (i, chunk) in program[128..].chunks_exact_mut(8).enumerate() {
+            for (i, chunk) in program[128..].as_chunks_mut::<8>().0.iter_mut().enumerate() {
                 chunk.copy_from_slice(&[
                     opcode as u8,
                     (i % 8) as u8,

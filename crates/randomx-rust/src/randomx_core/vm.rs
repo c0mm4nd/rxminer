@@ -705,9 +705,9 @@ impl Vm {
         let size = program.len();
         let entropy = |i| load(program, i * 8);
         let mut registers = Registers::default();
-        for i in 0..8 {
+        for (i, register) in registers.a.iter_mut().enumerate() {
             let bits = entropy(i);
-            registers.a[i] = (((bits >> 59) + 1023) << 52) | (bits & MANTISSA);
+            *register = (((bits >> 59) + 1023) << 52) | (bits & MANTISSA);
         }
         let mut ma = entropy(8) as u32 & DATASET_MASK;
         let mut mx = entropy(10) as u32;
@@ -742,8 +742,8 @@ impl Vm {
             let mix = registers.r[read[0]] ^ registers.r[read[1]];
             sp0 = (sp0 ^ mix as usize) & (SCRATCHPAD_SIZE - 64);
             sp1 = (sp1 ^ (mix >> 32) as usize) & (SCRATCHPAD_SIZE - 64);
-            for i in 0..8 {
-                registers.r[i] ^= load(&self.scratch, sp0 + 8 * i);
+            for (i, register) in registers.r.iter_mut().enumerate() {
+                *register ^= load(&self.scratch, sp0 + 8 * i);
             }
             for i in 0..4 {
                 registers.f[2 * i..2 * i + 2]
@@ -772,8 +772,8 @@ impl Vm {
                 *register ^= value;
             }
             std::mem::swap(&mut mx, &mut ma);
-            for i in 0..8 {
-                store(&mut self.scratch, sp1 + 8 * i, registers.r[i]);
+            for (i, register) in registers.r.iter().enumerate() {
+                store(&mut self.scratch, sp1 + 8 * i, *register);
             }
             if v2 {
                 self.aes.mix(&mut registers.f, &registers.e);
@@ -782,8 +782,8 @@ impl Vm {
                     registers.f[i] ^= registers.e[i];
                 }
             }
-            for i in 0..8 {
-                store(&mut self.scratch, sp0 + 8 * i, registers.f[i]);
+            for (i, register) in registers.f.iter().enumerate() {
+                store(&mut self.scratch, sp0 + 8 * i, *register);
             }
             sp0 = 0;
             sp1 = 0;
