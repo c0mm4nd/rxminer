@@ -4,7 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-blue.svg)](https://www.rust-lang.org)
 
-RandomX (`rx/0`) CPU miner with selectable pure Rust and bundled C++ hashing
+AI-optimized RandomX miner.
+
+Supports `rx/0` pools with selectable pure Rust and bundled C++ hashing
 backends, and Rust configuration, workers, Stratum and HTTP API.
 
 Rust JITs support x86-64, ARM64 and Linux RV64, with a selectable interpreter.

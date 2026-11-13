@@ -1,6 +1,6 @@
 # RandomX support
 
-RxMiner is a Rust CPU miner for `rx/0` pools. Its default hashing backend is the
+RxMiner is an AI-optimized RandomX miner for `rx/0` pools. Its default hashing backend is the
 Rust JITs in `crates/randomx-rust/src/randomx_jit/` on x86-64, ARM64 and Linux RV64, with a selectable
 portable interpreter in `crates/randomx-rust/src/randomx_core/`. Both support full/light memory modes,
 parallel dataset initialization, CPU affinity and NUMA placement.

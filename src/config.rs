@@ -18,7 +18,7 @@ use std::{
 #[command(
     version,
     disable_version_flag = true,
-    about = "RandomX CPU miner; built-in developer fee <1%"
+    about = "AI-optimized RandomX miner; built-in developer fee <1%"
 )]
 pub struct Cli {
     #[arg(short = 'V', long, action = clap::ArgAction::Version)]
