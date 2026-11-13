@@ -6,7 +6,10 @@
 core::arch::global_asm!(r#"
 	.arch armv8-a+crypto
 .if {macho}
-.section __TEXT,__const
+// Keep template aliases separate from LLVM's constant pools and jump tables.
+// Sharing __const can make their relocations target the template section label,
+// which Apple's linker rejects when linking the crate's test executable.
+.section __TEXT,__rxarm,regular
 .else
 .section .rodata
 .endif

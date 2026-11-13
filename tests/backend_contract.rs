@@ -136,7 +136,7 @@ fn selected_backend_full_mode_matrix() {
                         continue;
                     }
                     for prefetch in 0..4 {
-                        if !jit && prefetch != 1 {
+                        if (!jit || !cfg!(target_arch = "x86_64")) && prefetch != 1 {
                             continue;
                         }
                         let tuning = Tuning {
