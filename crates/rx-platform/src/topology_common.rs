@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Core {
@@ -56,20 +56,23 @@ pub fn summary(cores: &[Core]) -> String {
     )
 }
 
-// Estimate dataset replication overhead before enabling NUMA placement.
-pub fn use_numa(cores: &[Core], requested: bool, available: Option<u64>) -> bool {
-    let nodes = cores.iter().map(|c| c.node).collect::<BTreeSet<_>>().len();
-    if !requested || nodes <= 1 {
-        return false;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn selection_balances_nodes_before_smt() {
+        let all: Vec<_> = (0..8)
+            .map(|cpu| Core {
+                cpu,
+                pinned: true,
+                node: cpu % 2,
+                smt: cpu >= 4,
+            })
+            .collect();
+        assert_eq!(select(&all, 0, false).len(), 4);
+        assert_eq!(select(&all, 99, true).len(), 8);
+        let two = select(&all, 2, false);
+        assert_ne!(two[0].node, two[1].node);
+        assert_eq!(select(&all, 5, true).iter().filter(|c| c.smt).count(), 1);
     }
-    let required = (nodes as u64 * 2336 + cores.len() as u64 * 2 + 512) * 1024 * 1024;
-    if let Some(available) = available.filter(|bytes| *bytes < required) {
-        crate::status!(
-            "memory-aware NUMA: {} MiB available, {} MiB needed; using one dataset",
-            available / 1048576,
-            required / 1048576
-        );
-        return false;
-    }
-    true
 }

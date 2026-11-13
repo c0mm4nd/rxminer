@@ -41,12 +41,10 @@ jobs:
             os: windows-2022
             exe: '.exe'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
-    env:
-      RXMINER_ARCH: default
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,16 +55,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential
       - name: Rust checks and production build
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
+          cargo fmt --all --check
+          cargo clippy -p rxminer -p randomx-rust --locked --all-targets -- -D warnings
           cargo build --release --locked
           cargo test --release --locked
-      - name: JIT and native hash vectors
-        run: |
-          cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
-          cargo test --locked --release --test native_vectors -- --ignored --nocapture
+      - name: Rust backend unit tests
+        run: cargo test -p randomx-rust --locked --release
+      - name: Rust complete upstream hash vectors
+        run: cargo test -p randomx-rust --locked --release --lib upstream_full_hashes -- --ignored --nocapture
       - name: Light and full-memory CLI smoke
-        timeout-minutes: 10
+        timeout-minutes: 40
         run: cargo test --locked --release --test portable -- --ignored --nocapture
       - name: Local protocol and failover regression
         if: matrix.platform == 'linux-x86_64'

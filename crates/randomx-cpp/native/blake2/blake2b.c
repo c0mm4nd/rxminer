@@ -333,7 +333,6 @@ int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
 		goto fail;
 	}
 
-#if !defined(RXM_BLAKE2_STREAMING)
 	/* RandomX hashes its 256-byte register file eight times per hash.
 	 * Consume those two complete blocks directly, without a streaming buffer
 	 * or parameter block. Only the fields read by compress need initialization.
@@ -377,7 +376,6 @@ int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
 			store64((uint8_t*)out + i * sizeof(uint64_t), S.h[i]);
 		return 0;
 	}
-#endif
 
 	if (keylen > 0) {
 		if (blake2b_init_key(&S, outlen, key, keylen) < 0) {

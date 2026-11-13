@@ -26,7 +26,7 @@ runs:
         name="rxminer-v${version}-${RELEASE_PLATFORM}"
         mkdir -p "dist/$name"
         cp "target/release/rxminer${EXE_SUFFIX}" README.md LICENSE Cargo.lock config.example.json "dist/$name/"
-        cp src/crypto/randomx/LICENSE "dist/$name/LICENSE-RandomX"
+        cp crates/randomx-rust/src/randomx_core/LICENSE "dist/$name/LICENSE-RandomX"
         cp .github/release/LICENSE-ring .github/release/LICENSE-rustls .github/release/LICENSE-webpki "dist/$name/"
         cp -r docs "dist/$name/"
         echo "PACKAGE_NAME=$name" >> "$GITHUB_ENV"
@@ -36,7 +36,7 @@ runs:
       shell: bash
       run: |
         otool -L "dist/$PACKAGE_NAME/rxminer" | tee "$RUNNER_TEMP/release-dependencies.txt"
-        if grep -E 'lib(ssl|crypto)|/opt/homebrew/|/usr/local/' "$RUNNER_TEMP/release-dependencies.txt"; then
+        if grep -E 'lib(ssl|crypto|c\+\+)|/opt/homebrew/|/usr/local/' "$RUNNER_TEMP/release-dependencies.txt"; then
           echo 'Unexpected non-system runtime dependency' >&2
           exit 1
         fi
@@ -79,8 +79,8 @@ runs:
         test "$("$binary" --version)" = "rxminer $PACKAGE_VERSION"
         if [[ "$RUNNER_OS" == Linux ]]; then
           ldd "$binary" | tee "$RUNNER_TEMP/release-dependencies.txt"
-          if grep -E 'lib(ssl|crypto)\.' "$RUNNER_TEMP/release-dependencies.txt"; then
-            echo 'Unexpected OpenSSL runtime dependency' >&2
+          if grep -E 'lib(ssl|crypto|stdc\+\+)\.' "$RUNNER_TEMP/release-dependencies.txt"; then
+            echo 'Unexpected OpenSSL/C++ runtime dependency' >&2
             exit 1
           fi
         fi

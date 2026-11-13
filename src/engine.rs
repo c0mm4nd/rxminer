@@ -393,7 +393,7 @@ impl Worker {
             };
             if changed {
                 if pending {
-                    let hash = vm.last();
+                    let hash = vm.last()?;
                     self.counter.record();
                     self.report(pending_job.as_ref().unwrap(), pending_nonce, hash);
                     pending = false;
@@ -437,7 +437,7 @@ impl Worker {
                 }
                 cursor += self.count as u64;
                 if cursor >= nonce_limit {
-                    let hash = vm.last();
+                    let hash = vm.last()?;
                     self.counter.record();
                     self.report(job, pending_nonce, hash);
                     pending = false;
@@ -447,7 +447,7 @@ impl Worker {
                 let next = 1 - current;
                 buffers[next][NONCE_OFFSET..NONCE_OFFSET + 4]
                     .copy_from_slice(&next_nonce.to_le_bytes());
-                let hash = vm.next(&buffers[next][..blob_size]);
+                let hash = vm.next(&buffers[next][..blob_size])?;
                 self.counter.record();
                 self.report(job, pending_nonce, hash);
                 current = next;
@@ -456,7 +456,7 @@ impl Worker {
             self.counter.flush();
         }
         if pending {
-            let hash = vm.last();
+            let hash = vm.last()?;
             self.counter.record();
             self.report(pending_job.as_ref().unwrap(), pending_nonce, hash);
         }

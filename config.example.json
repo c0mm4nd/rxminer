@@ -26,6 +26,8 @@
     "argon2-impl": null
   },
   "randomx": {
+    "jit": true,
+    "secure": false,
     "init": -1,
     "mode": "auto",
     "numa": true,

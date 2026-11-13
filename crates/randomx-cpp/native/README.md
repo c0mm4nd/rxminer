@@ -7,22 +7,22 @@
 - License: [BSD 3-Clause](LICENSE).
 - Selected optimizations are adapted from BSD-licensed files in XMRig commit
   `b2ca72480c58d197e18c885d9fc1a0c8d517e60a`, including
-  `src/crypto/randomx/jit_compiler_x86.cpp` and `aes_hash.cpp`.
+  `crates/randomx-cpp/native/jit_compiler_x86.cpp` and `aes_hash.cpp`.
   Original author notices are retained in the adapted files and packaged
   license.
 
 ## Maintenance
 
-RandomX is maintained in-tree under `src/crypto/randomx/`. Source changes and
+RandomX is maintained in-tree under `crates/randomx-cpp/native/`. Source changes and
 upstream updates are reviewed and committed with the miner; there is no
 submodule or build-time source download. Keep upstream attribution and local
 regression coverage when applying updates.
 
-Cargo compiles these sources directly through `build.rs`. The source package
-includes the implementation and license. Regression tests live in
-`tests/randomx/`; upstream examples and analysis tools are omitted. Windows x64, ARM64 and RV64
-backends are restored from the same pinned upstream commit. The optional native developer build is configured by
-`cmake/randomx.cmake`. Run validation commands from the repository root.
+These sources are bundled and built by the `randomx-cpp` crate when the miner
+selects `--no-default-features --features randomx-cpp`. The default miner uses
+the independent `randomx-rust` crate. The optional Linux x86-64 differential
+reference is built through `cmake/randomx.cmake`. The notes below describe the
+native backend.
 
 Windows uses the upstream x64 JIT and ABI-specific assembly. Unix x86-64 keeps
 the local optimized JIT. ARM64 uses the upstream JIT with a dedicated executable
@@ -72,17 +72,7 @@ state between VMs. Performance should be measured on the target system.
 
 ## Validation
 
-```bash
-cargo test --locked --release --test tooling native_regressions -- --ignored
-```
-
-The driver links the native archive built by Cargo and runs the upstream
-suite plus JIT state, program generation and BLAKE2b differential checks.
-Coverage includes raw/normalized programs, v1/v2 switching, software/hardware
-AES, reciprocal boundaries, keyed fallback and overlapping buffers.
-Hardware-dependent cases may be skipped when unavailable.
-
-Rust tests additionally cover known vectors, full-memory/light-VM agreement,
-secure JIT and worker lifecycle behavior. See the
-[performance guide](../../../docs/OPTIMIZATION.md) for commands. CMake is not
-required to build, install or run the Cargo-based checks.
+See the [development guide](../../../docs/DEVELOPMENT.md#optional-native-differential-tests)
+for the explicit CMake build and oracle environment variables. The ignored
+Cargo differential tests only execute/load that prebuilt reference. Ordinary
+Cargo builds with the default Rust backend require no RandomX C/C++ compilation.

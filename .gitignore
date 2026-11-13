@@ -9,7 +9,3 @@ randomx-ref/
 *.o
 *.a
 dist/
-
-# Benchmark reports can contain local environment details. Keep only source.
-bench/*
-!bench/*.cpp

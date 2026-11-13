@@ -4,45 +4,54 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-blue.svg)](https://www.rust-lang.org)
 
-RandomX (`rx/0`) CPU miner. Rust control plane (config, workers, Stratum,
-HTTP API) over an integrated RandomX C/C++ hashing library with JIT backends.
+AI-optimized RandomX miner.
 
-- Cargo-only build; no CMake, Make or Ninja
-- NUMA-local dataset replication, CPU affinity, 2 MiB huge pages, light mode
+Supports `rx/0` pools with selectable pure Rust and bundled C++ hashing
+backends, and Rust configuration, workers, Stratum and HTTP API.
+
+Rust JITs support x86-64, ARM64 and Linux RV64, with a selectable interpreter.
+Hardware AES, x86-64 SSSE3/AVX2 cache kernels, page preferences, Linux THP policy
+and scratchpad pooling are implemented. See platform notes for native, QEMU
+and compile-only validation coverage.
+
+- Cargo features select independent `randomx-rust` (default) or `randomx-cpp` crates
+- Rust x86-64/ARM64/RV64 JITs for full/light v1/v2 and parallel dataset initialization
+- Full/light memory modes, NUMA placement and CPU affinity
 - Stratum over TCP/TLS, certificate pinning, failover, SOCKS5 / HTTP CONNECT
 - JSON config with live reload; optional authenticated HTTP API
-- Opt-in MSR tuning, restored on exit
-- Offline benchmark mode
+- Opt-in MSR tuning, restored on exit; offline benchmark mode
 
-| Target | Backend |
-| --- | --- |
-| Linux x86-64 | Optimized x86-64 JIT |
-| Linux ARM64 | ARM64 JIT |
-| macOS x86-64 | Optimized x86-64 JIT |
-| macOS ARM64 | ARM64 JIT, W^X |
-| Windows x64 (MSVC) | Windows x64 JIT |
-
-Details: [platforms](docs/PLATFORMS.md),
-[implementation status](docs/CONFIGURATION.md#remaining-implementation-work).
+Details: [platforms](docs/PLATFORMS.md), [RandomX status](docs/RANDOMX.md).
 
 ## Build
 
-Requires Rust 1.88+ and a C/C++ toolchain for RandomX
-([per-platform](docs/PLATFORMS.md#dependencies)).
+Requires Rust 1.88+. The default `randomx-rust` backend needs no RandomX
+C/C++ compiler. TLS uses ring's C/assembly kernels, so building the miner still
+needs a C toolchain and linker. The `randomx-cpp` backend additionally needs a
+C++ compiler (GCC/Clang, or Visual Studio C++ build tools on Windows).
 
 ```bash
-sudo apt-get install -y gcc g++   # Debian/Ubuntu
-
-cargo install --git https://github.com/c0mm4nd/rxminer.git --locked --bin rxminer
-# or, from a checkout:
+# Pure Rust RandomX (default)
+cargo build --release --locked
 cargo install --path . --locked --bin rxminer
+
+# Bundled C++ RandomX
+cargo build --release --locked --no-default-features --features randomx-cpp
+cargo install --path . --locked --no-default-features --features randomx-cpp
 ```
 
-Host-specific build:
+Select exactly one backend. `--features randomx-cpp` alone keeps the default
+Rust feature enabled and is rejected, as is selecting neither backend.
+CLI and configuration options are shared; this is a build-time choice.
+Both crates are maintained in `crates/` with no build-time source download.
+The Rust crate retains its JITs and portable interpreter; the C++ crate owns
+its native cache, dataset and VM through a safe Rust interface.
+The shared [`rx-platform`](crates/rx-platform) crate handles CPU topology, affinity,
+NUMA binding and OS resource limits independently of either algorithm backend.
 
-```bash
-RXMINER_ARCH=native RUSTFLAGS='-C target-cpu=native' cargo build --release --locked
-```
+For a binary used only on the build machine, add `RUSTFLAGS='-C target-cpu=native'` to the build.
+Backend-specific development and testing commands are in
+[the development guide](docs/DEVELOPMENT.md).
 
 ## Usage
 
@@ -60,23 +69,12 @@ plus 2 MiB scratchpad per worker. `--randomx-mode light` uses the 256 MiB
 cache only, at lower hashrate.
 
 Defaults: workers = allowed physical cores (Linux honors affinity and cgroup
-quota); huge pages requested with fallback; HTTP API off, loopback and
+quota); reserved huge pages preferred with ordinary-page fallback; HTTP API off, loopback and
 read-only when enabled (`--http-port`); control requires a token and
 `http.restricted: false`.
 
 Full reference: [configuration](docs/CONFIGURATION.md),
 [tuning](docs/OPTIMIZATION.md).
-
-## Performance
-
-RxMiner 0.5.0 vs XMRig 6.26.0, 2026-11-04, matched settings, mean of 2 runs:
-
-| Run | RxMiner kH/s | XMRig kH/s | Delta |
-| --- | ---: | ---: | ---: |
-| A | 38.55 | 33.76 | +14.20% |
-| B | 46.89 | 39.80 | +17.80% |
-
-Historical results on shared hosts; measure on your own hardware.
 
 ## Donation
 
@@ -96,4 +94,4 @@ XMR:
 
 ## License
 
-MIT. Bundled RandomX: [BSD 3-Clause](src/crypto/randomx/LICENSE).
+MIT. Bundled RandomX: [BSD 3-Clause](crates/randomx-rust/src/randomx_core/LICENSE).

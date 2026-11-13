@@ -1,20 +1,23 @@
+[workspace]
+members = ["crates/randomx-rust", "crates/randomx-cpp", "crates/rx-platform"]
+default-members = ["."]
+resolver = "2"
+
 [package]
 name = "rxminer"
 version = "0.1.1"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-description = "RandomX CPU miner with NUMA placement and TLS Stratum"
-build = "build.rs"
+description = "AI-optimized RandomX miner"
+build = false
 readme = "README.md"
 keywords = ["randomx", "monero", "mining", "stratum", "numa"]
 categories = ["command-line-utilities"]
 include = [
-    "/Cargo.toml", "/Cargo.lock", "/build.rs", "/src/*.rs",
+    "/Cargo.toml", "/Cargo.lock", "/src/*.rs",
     "/README.md", "/LICENSE", "/config.example.json", "/docs/*.md",
-    "/CMakeLists.txt", "/cmake/*.cmake", "/bench/*.cpp",
-    "/tests/*.rs", "/tests/support/**", "/tests/randomx/**",
-    "/src/crypto/randomx/**",
+    "/tests/*.rs", "/tests/support/**",
 ]
 
 [[bin]]
@@ -22,12 +25,16 @@ name = "rxminer"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["randomx-rust"]
+randomx-rust = ["dep:randomx-rust"]
+randomx-cpp = ["dep:randomx-cpp"]
 # Local regression builds only; never enable for release artifacts.
 test-dev-fee = []
-vaes = []
 
 [dependencies]
+rx-platform = { version = "0.1.0", path = "crates/rx-platform" }
+randomx-rust = { version = "0.1.0", path = "crates/randomx-rust", optional = true }
+randomx-cpp = { version = "0.1.0", path = "crates/randomx-cpp", optional = true }
 anyhow = "1"
 arc-swap = "1"
 base64 = "0.22"
@@ -48,13 +55,10 @@ url = "2"
 signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_System_SystemInformation"] }
-
-[build-dependencies]
-cc = "1.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_System_Console", "Win32_System_Threading", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
-cc = "1.2"
+libloading = "0.8.9"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [profile.release]

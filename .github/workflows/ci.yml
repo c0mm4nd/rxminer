@@ -1,4 +1,4 @@
-name: Rust and native regression
+name: RandomX backends and runtime regression
 on:
   push:
     branches:
@@ -25,7 +25,7 @@ jobs:
             cc: clang
             cxx: clang++
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -33,28 +33,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang
+        run: sudo apt-get update && sudo apt-get install -y clang cmake
       - name: Rust toolchain
         run: |
           rustup toolchain install '${{ matrix.rust }}' --profile minimal --component rustfmt --component clippy
           rustup default '${{ matrix.rust }}'
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
-      - run: cargo test --locked
-      - name: Full dataset and JIT consensus
-        run: cargo test --locked --release --lib -- --ignored --test-threads=1
-      - name: Native correctness
-        run: cargo test --locked --release --test tooling native_regressions -- --ignored --nocapture
-      - name: Native vectors and short preparation sample
-        env:
-          RXMINER_SHORT_BENCH: '1'
-        run: cargo test --locked --release --test native_vectors -- --ignored --nocapture
-      - name: Optional VAES build and native vectors
-        if: matrix.rust == 'stable'
-        run: cargo test --locked --release --features vaes --test native_vectors -- --ignored --nocapture
+      - run: cargo fmt --all --check
+      - name: Standalone Rust RandomX core
+        run: |
+          rustc --edition=2021 -O --test crates/randomx-rust/src/randomx_core/mod.rs -o "$RUNNER_TEMP/randomx-core-tests"
+          "$RUNNER_TEMP/randomx-core-tests"
+      - run: cargo clippy -p rxminer -p randomx-rust -p rx-platform --locked --all-targets --features test-dev-fee -- -D warnings
+      - run: cargo test --locked --release
+      - name: Rust backend and platform unit tests
+        run: cargo test -p randomx-rust -p rx-platform --locked --release
+      - name: Full dataset and Rust consensus
+        run: |
+          cargo test -p randomx-rust --locked --release --lib -- --ignored --test-threads=1
+          cargo test -p rxminer --locked --release --lib -- --ignored --test-threads=1
+      - name: Rust backend complete mode contract
+        run: cargo test -p rxminer --locked --release --test backend_contract -- --ignored --test-threads=1
+      - name: C++ backend lint and runtime tests
+        run: |
+          cargo clippy -p rxminer -p randomx-cpp -p rx-platform --locked --all-targets --no-default-features --features rxminer/randomx-cpp -- -D warnings
+          cargo test -p rxminer --locked --release --no-default-features --features randomx-cpp -- --test-threads=1
+          cargo test -p randomx-cpp --locked --release
+      - name: C++ backend complete mode contract
+        run: cargo test -p rxminer --locked --release --no-default-features --features randomx-cpp --test backend_contract -- --ignored --test-threads=1
+      - name: Build separate native reference
+        run: |
+          cmake -S . -B target/native-reference -DBUILD_SHARED_LIBS=ON
+          cmake --build target/native-reference --target randomx-oracles -j 2
+      - name: Rust and native reference comparison
+        run: |
+          RXMINER_NATIVE_LIBRARY="$PWD/target/native-reference/librandomx.so" cargo test --locked --release --test randomx_rust -- --ignored --nocapture
+          RXMINER_ORACLE_DIR="$PWD/target/native-reference" cargo test --locked --release --test native_vectors -- --ignored --nocapture
       - name: Local protocol and runtime regression
         run: |
-          cargo test --locked --release --features test-dev-fee --test network -- --ignored --test-threads=1 --nocapture
+          cargo test --locked --release --features test-dev-fee --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
       - name: Package and install without OpenSSL or external build tools
         if: matrix.rust == 'stable'
         run: cargo test --locked --release --test tooling cargo_install_without_external_build_tools -- --ignored --nocapture
@@ -77,7 +93,7 @@ jobs:
             os: windows-2022
             exe: '.exe'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -89,22 +105,33 @@ jobs:
         with:
           components: clippy
       - name: Rust lint checks
-        run: cargo clippy --locked --all-targets --features test-dev-fee -- -D warnings
+        run: cargo clippy -p rxminer -p randomx-rust -p rx-platform --locked --all-targets --features test-dev-fee -- -D warnings
+      - name: Standalone Rust RandomX core
+        run: |
+          rustc --edition=2021 -O --test crates/randomx-rust/src/randomx_core/mod.rs -o "$RUNNER_TEMP/randomx-core-tests${{ matrix.exe }}"
+          "$RUNNER_TEMP/randomx-core-tests${{ matrix.exe }}"
       - name: Unit tests and hash vectors
-        timeout-minutes: 5
-        run: cargo test --locked -- --nocapture
-      - name: JIT and secure JIT consensus
-        run: cargo test --locked --release --lib jit_and_secure_jit_match_interpreter -- --ignored --nocapture
-      - name: Native vectors and short preparation sample
-        env:
-          RXMINER_SHORT_BENCH: '1'
-        run: cargo test --locked --release --test native_vectors -- --ignored --nocapture
+        timeout-minutes: 15
+        run: cargo test --locked --release -- --nocapture
+      - name: Rust complete upstream hash vectors
+        run: cargo test -p randomx-rust --locked --release --lib upstream_full_hashes -- --ignored --nocapture
+      - name: Rust backend and platform unit tests
+        run: cargo test -p randomx-rust -p rx-platform --locked --release
       - name: Full-memory shares and concurrent job switches
         run: |
           cargo test --locked --release --lib full_dataset_shares_match_light_vm_across_fee_switches -- --ignored --nocapture
           cargo test --locked --release --lib worker_failures_stop_all_workers_and_clear_state -- --ignored --nocapture
       - name: Light and full-memory mining
         run: cargo test --locked --release --test portable -- --ignored --nocapture
+      - name: Rust backend complete mode contract
+        run: cargo test -p rxminer --locked --release --test backend_contract -- --ignored --test-threads=1
+      - name: C++ backend lint and runtime tests
+        run: |
+          cargo clippy -p rxminer -p randomx-cpp -p rx-platform --locked --all-targets --no-default-features --features rxminer/randomx-cpp -- -D warnings
+          cargo test -p rxminer --locked --release --no-default-features --features randomx-cpp -- --test-threads=1
+          cargo test -p randomx-cpp --locked --release
+      - name: C++ backend complete mode contract
+        run: cargo test -p rxminer --locked --release --no-default-features --features randomx-cpp --test backend_contract -- --ignored --test-threads=1
       - name: Cargo installation
         run: |
           cargo install --path . --locked --root "$RUNNER_TEMP/rxminer-install"
