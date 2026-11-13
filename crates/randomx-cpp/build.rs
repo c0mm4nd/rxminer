@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use std::{env, fs, path::PathBuf};
 
 const C_SOURCES: &[&str] = &[
@@ -8,6 +9,7 @@ const C_SOURCES: &[&str] = &[
     "virtual_memory.c",
 ];
 const CPP_SOURCES: &[&str] = &[
+    "bridge.cpp",
     "aes_hash.cpp",
     "allocator.cpp",
     "blake2_generator.cpp",
@@ -30,10 +32,9 @@ fn main() {
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let cpu = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let msvc = env::var("CARGO_CFG_TARGET_ENV").unwrap() == "msvc";
-    println!("cargo:rerun-if-changed=src/crypto/randomx");
+    println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-env-changed=RXMINER_ARCH");
-    let source =
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("src/crypto/randomx");
+    let source = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("native");
     let arch = env::var("RXMINER_ARCH").unwrap_or_else(|_| "default".into());
     assert!(
         matches!(arch.as_str(), "default" | "native"),
@@ -93,6 +94,10 @@ fn main() {
         objects.extend(kernel.compile_intermediates());
     }
     let mut cpp = common.clone();
+    if msvc {
+        // Preserve RAII cleanup and the FP guard when native operations throw.
+        cpp.flag("/EHsc");
+    }
     let vaes = env::var_os("CARGO_FEATURE_VAES").is_some() && cpu == "x86_64" && !msvc;
     if vaes {
         objects.extend(

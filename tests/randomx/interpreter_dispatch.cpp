@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Compare loop-local dispatch with the retained single-instruction interface.
 #include "bytecode_machine.hpp"
-#include <algorithm>
 #include <cfenv>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
-#include <vector>
 
 using namespace randomx;
-using Clock = std::chrono::steady_clock;
-using Execute = void (*)(InstructionByteCode*, uint8_t*, ProgramConfiguration&, randomx_flags);
 static void require(bool value) { if (!value) std::abort(); }
 static uint64_t next(uint64_t& state) {
     state ^= state << 13; state ^= state >> 7; state ^= state << 17;
@@ -74,8 +70,7 @@ static NativeRegisterFile registers(unsigned seed) {
     return reg;
 }
 
-int main(int argc, char** argv) {
-    require(argc == 1 || (argc == 2 && std::strcmp(argv[1], "--sample") == 0));
+int main() {
     std::fenv_t saved;
     require(std::fegetenv(&saved) == 0);
     Buffer initial, scratch, expected;
@@ -114,42 +109,5 @@ int main(int argc, char** argv) {
         }
     }
     std::printf("PASSED interpreter dispatch: %u register/scratchpad/rounding cases\n", cases);
-    if (argc == 2) {
-        const auto deadline = Clock::now() + std::chrono::milliseconds(500);
-        for (auto flags : {RANDOMX_FLAG_DEFAULT, RANDOMX_FLAG_V2}) {
-            std::vector<double> before, after;
-            // Average a fixed corpus per pair instead of timing a single opcode mix.
-            for (unsigned pair = 0; pair < 9 && Clock::now() < deadline; ++pair) {
-                double times[2] = {};
-                for (unsigned seed = 4; seed < 20; ++seed) {
-                    auto p = program(seed);
-                    NativeRegisterFile reg{};
-                    InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE];
-                    BytecodeMachine compiler;
-                    compiler.compileProgram(p, bytecode, reg, flags);
-                    for (unsigned order = 0; order < 2; ++order) {
-                        const auto which = (pair + order) % 2;
-                        Execute execute = which ? BytecodeMachine::executeBytecode : singleStep;
-                        reg = registers(seed);
-                        std::memcpy(scratch.data, initial.data, ScratchpadSize);
-                        rx_reset_float_state();
-                        const auto start = Clock::now();
-                        for (unsigned repeat = 0; repeat < 32; ++repeat)
-                            execute(bytecode, scratch.data, config, flags);
-                        times[which] += std::chrono::duration<double, std::nano>(Clock::now() - start).count() / (16 * 32);
-                    }
-                }
-                if (pair) { before.push_back(times[0]); after.push_back(times[1]); }
-            }
-            if (before.empty()) continue;
-            const auto median = [](std::vector<double>& times) {
-                std::sort(times.begin(), times.end());
-                return (times[times.size() / 2] + times[(times.size() - 1) / 2]) / 2;
-            };
-            rx_reset_float_state();
-            std::printf("RXM_DISPATCH_SAMPLE {\"version\":%u,\"pairs\":%u,\"single_step_ns\":%.2f,\"loop_ns\":%.2f}\n",
-                flags == RANDOMX_FLAG_V2 ? 2 : 1, unsigned(before.size()), median(before), median(after));
-        }
-    }
     require(std::fesetenv(&saved) == 0);
 }

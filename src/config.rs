@@ -238,6 +238,8 @@ impl Default for CpuConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 struct RandomxConfig {
+    jit: bool,
+    secure: bool,
     init: i32,
     init_avx2: i32,
     #[serde(rename = "scratchpad_prefetch_mode")]
@@ -254,6 +256,8 @@ struct RandomxConfig {
 impl Default for RandomxConfig {
     fn default() -> Self {
         Self {
+            jit: crate::randomx::JIT_SUPPORTED,
+            secure: false,
             init: -1,
             init_avx2: -1,
             prefetch_mode: 1,
@@ -604,6 +608,8 @@ impl Options {
             _ => bail!("cpu.memory-pool must be boolean or a page count"),
         };
         let tuning = Tuning {
+            jit: file.randomx.jit,
+            secure: file.randomx.secure,
             mode,
             one_gb_pages: file.randomx.gb_pages || cli.one_gb_pages,
             hw_aes: file.cpu.hw_aes,
@@ -935,10 +941,10 @@ impl Options {
                 "battery monitoring currently requires Linux"
             );
         }
-        if !cfg!(all(target_arch = "x86_64", not(windows))) {
+        if !cfg!(all(target_arch = "x86_64", any(unix, windows))) {
             ensure!(
                 self.prefetch_mode == 1,
-                "custom JIT prefetch modes currently require the Unix x86-64 backend"
+                "custom JIT prefetch modes currently require the x86-64 backend"
             );
         }
         if cfg!(windows) {

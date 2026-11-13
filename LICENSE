@@ -21,4 +21,5 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Third-party components retain their own licenses:
-  - src/crypto/randomx: BSD 3-Clause (see src/crypto/randomx/LICENSE)
+  - crates/randomx-rust: BSD 3-Clause algorithms, MIT integration
+  - crates/randomx-cpp/native: BSD 3-Clause (see crates/randomx-cpp/LICENSE)

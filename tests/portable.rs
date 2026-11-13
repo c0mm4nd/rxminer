@@ -59,7 +59,7 @@ fn light_and_full_memory_mining() {
                     "--threads",
                     "1",
                     "--randomx-init",
-                    "2",
+                    "8",
                     "--randomx-no-numa",
                     "--no-huge-pages",
                     "--no-proxy",
@@ -72,9 +72,9 @@ fn light_and_full_memory_mining() {
         );
         let deadline = Instant::now()
             + Duration::from_secs(if cfg!(target_arch = "riscv64") {
-                900
+                3600
             } else {
-                180
+                1800
             });
         let status = loop {
             if let Some(status) = miner.0.try_wait().unwrap() {

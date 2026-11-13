@@ -1,5 +1,11 @@
 # Configuration
 
+Local Rust migration: x86-64, ARM64 and Linux RV64 use Rust JITs by default.
+`randomx.jit: false` selects the interpreter; `randomx.secure: true` requests
+strict JIT write protection. Hardware AES and cache kernels are selected at
+runtime. Page preferences, Linux THP policy and scratchpad pooling are active.
+See [RandomX status](RANDOMX.md) for the validation scope.
+
 RxMiner uses familiar `pools`, `cpu`, `randomx`, `http`, and logging options.
 CLI values override JSON. Start from [config.example.json](../config.example.json)
 and validate with `rxminer -c config.json --dry-run`. Validation does not connect
@@ -76,20 +82,36 @@ configures the API server, separately from pool TLS.
 | `--randomx-no-numa` | `randomx.numa: false` | Share one dataset/cache |
 | `--argon2-impl` | `cpu.argon2-impl` | `auto`, `x86_64`, `SSSE3`, `AVX2`; CPU support is checked |
 
-`cpu.hw-aes` is `null` for detection or a boolean override. Hardware AES cannot
-be forced on an unsupported CPU. `cpu.memory-pool` is false, true (one retained
-2 MiB scratchpad per worker), or a page count. Idle scratchpads are reused only
-for the same NUMA node and allocation type; each live VM has exclusive ownership.
-The pool is cleared when runtime configuration is reapplied.
+`cpu.hw-aes` is `null` for detection or a boolean override. AES-NI on x86-64
+and ARMv8 AES on ARM64 work in both the interpreter and JIT. A forced hardware
+backend is rejected when unavailable. `cpu.argon2-impl` accepts `auto`, `x86_64`
+(the scalar kernel), `SSSE3` and `AVX2`; the latter two require x86-64 CPU support.
+Auto prefers AVX2, then SSSE3, then scalar. `randomx.init-avx2: 1` still denotes
+an unimplemented dataset initializer in the retained C++ fork and is rejected.
 
-`randomx.scratchpad_prefetch_mode`: 0 disables prefetch, 1 uses T0 (default),
-2 uses NTA, and 3 uses a load. JIT instances retain their selected mode and mapping
-length. Reserved pages must already be available; the miner does not reserve
-system pages. A 1 GiB dataset mapping requires three pages. Logs distinguish
-2 MiB datasets from 1 GiB datasets. JIT huge-page allocation falls back silently.
-An allocated JIT huge page consumes 2 MiB per VM even when its code fits in the
-compact 16 KiB full-memory Unix x86-64 buffer; ordinary-page JIT allocations
-use the smaller mapping.
+`randomx.jit` defaults to `true` on supported JIT platforms. Set it to `false`
+to select the interpreter independently of full/light and software/hardware AES.
+`randomx.secure` defaults to `false`; enabling it selects a single RW/RX code
+mapping on Linux x86-64/ARM64. Windows and RV64 always use single RW/RX mappings.
+Apple Silicon uses MAP_JIT and per-thread write protection. Linux x86-64/ARM64
+normally use separate RW and RX aliases; neither alias is writable and executable.
+
+`cpu.huge-pages` requests reserved 2 MiB pages for cache, dataset and scratchpads.
+`randomx.1gb-pages` requests 1 GiB dataset pages on Linux. Failed page reservations
+fall back to smaller pages; status reports the actual allocation. `cpu.thp`
+controls Linux MADV_HUGEPAGE/MADV_NOHUGEPAGE on ordinary mappings and does not
+modify system-wide kernel settings. The low-level allocator also retains the
+C++ diagnostics: `RXM_THP=0` disables THP before any explicit policy is set;
+`RXM_COLLAPSE` requests synchronous population/collapse and `RXM_DEBUG` logs
+its outcome. Miner configuration takes precedence over `RXM_THP`.
+`cpu.memory-pool` retains idle scratchpads
+up to the configured capacity, separated by NUMA node and page type; resetting
+the policy releases idle pages. `cpu.huge-pages-jit` requests reserved code pages
+where supported; Apple Silicon retains its OS-managed MAP_JIT allocation.
+
+`randomx.scratchpad_prefetch_mode` selects 0 (none), 1 (T0), 2 (NTA), or 3 (load)
+on x86-64. Other architectures retain their native template policy and accept
+only the default value 1.
 
 Profiles select `cpu["rx/0"]`, then `cpu.rx`, then `cpu["*"]`. Entries can be
 CPU IDs (`-1` means unbound), `[1, CPU_ID]` pairs, or an object containing

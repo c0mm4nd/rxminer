@@ -21,7 +21,7 @@ fn shares_ready(data: &Value, threads: u64) -> bool {
 }
 
 #[test]
-#[ignore = "TLS/proxy/full-memory regression; needs 4 GiB free RAM"]
+#[ignore = "TLS/proxy/share regression; full-memory execution is covered by portable tests"]
 fn protocol_and_fee_windows() -> Result<()> {
     let temp = TempDir::new("protocol")?;
     let cert = Certificate::new(&temp.0)?;
@@ -48,7 +48,7 @@ fn protocol_and_fee_windows() -> Result<()> {
                     "pools": [{"url": format!("127.0.0.1:{}", pool.port()), "user": "test-wallet", "tls": true,
                         "tls-ca": cert.cert, "tls-fingerprint": cert.fingerprint}],
                     "cpu": {"rx": cpus, "huge-pages": false},
-                    "randomx": {"numa": false, "init": 2},
+                    "randomx": {"numa": false, "init": 2, "mode": "light"},
                     "http": {"enabled": true, "host": "127.0.0.1", "port": api.port,
                         "access-token": api.token, "restricted": true}, "print-time": 0
                 }),
@@ -64,6 +64,8 @@ fn protocol_and_fee_windows() -> Result<()> {
                     "test-wallet",
                     "-t",
                     "2",
+                    "--randomx-mode",
+                    "light",
                     "--randomx-no-numa",
                     "--no-huge-pages",
                     "--no-proxy",

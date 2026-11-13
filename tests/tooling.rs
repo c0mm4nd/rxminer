@@ -1,91 +1,10 @@
-#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![cfg(all(feature = "randomx-rust", target_os = "linux", target_arch = "x86_64"))]
 //! Developer checks run explicitly; ordinary `cargo test` does not rebuild packages.
 mod support;
 
 use anyhow::{ensure, Context, Result};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 use support::{root, run, TempDir};
-
-#[test]
-#[ignore = "compiles and runs the Unix x86 JIT execution differential"]
-fn native_regressions() -> Result<()> {
-    let temp = TempDir::new("native-tests")?;
-    let library = Path::new(env!("OUT_DIR")).join("librandomx.a");
-    ensure!(library.is_file(), "Cargo-built RandomX archive missing");
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let version = Command::new(rustc).arg("-vV").output()?;
-    ensure!(version.status.success(), "rustc -vV failed");
-    let text = String::from_utf8(version.stdout)?;
-    let host = text
-        .lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .context("rustc host")?;
-    let compiler = cc::Build::new()
-        .cpp(true)
-        .host(host)
-        .target(host)
-        .opt_level(2)
-        .debug(false)
-        .cargo_metadata(false)
-        .out_dir(&temp.0)
-        .get_compiler();
-    // Consensus, generation and BLAKE2b checks run in native_vectors on every platform.
-    for source in [
-        "jit_optimizations",
-        "jit_rounding",
-        "jit_swaps",
-        "jit_memory",
-    ] {
-        let binary = temp.0.join(source);
-        let mut command = compiler.to_command();
-        command
-            .args(["-std=c++11", "-O2", "-maes", "-DHAVE_POSIX_MEMALIGN", "-I"])
-            .arg(root().join("src/crypto/randomx"))
-            .arg(root().join(format!("tests/randomx/{source}.cpp")))
-            .arg(&library)
-            .args(["-pthread", "-lm", "-o"])
-            .arg(&binary);
-        run(
-            &mut command,
-            temp.0.join(format!("{source}-compile.log")),
-            120,
-        )?;
-        println!(
-            "{}",
-            run(
-                &mut Command::new(&binary),
-                temp.0.join(format!("{source}.log")),
-                180
-            )?
-        );
-        if source == "jit_optimizations" {
-            println!(
-                "{}",
-                run(
-                    Command::new(&binary).arg("--normalized"),
-                    temp.0.join("normalized.log"),
-                    180
-                )?
-            );
-            for normalized in [false, true] {
-                let mut command = Command::new(&binary);
-                command.arg("--compact");
-                if normalized {
-                    command.arg("--normalized");
-                }
-                println!(
-                    "{}",
-                    run(
-                        &mut command,
-                        temp.0.join(format!("compact-{normalized}.log")),
-                        180
-                    )?
-                );
-            }
-        }
-    }
-    Ok(())
-}
 
 fn guarded(command: &mut Command, guard: &Path, guard_log: &Path) -> Result<()> {
     let mut paths = vec![guard.to_owned()];
@@ -97,6 +16,8 @@ fn guarded(command: &mut Command, guard: &Path, guard_log: &Path) -> Result<()> 
         .env("RXMINER_BUILD_GUARD_LOG", guard_log)
         .env("CMAKE", guard.join("cmake"))
         .env("MAKE", guard.join("make"))
+        .env("CXX", guard.join("c++"))
+        .env("CXX_x86_64_unknown_linux_gnu", guard.join("c++"))
         // A host with OpenSSL installed must not hide a TLS build dependency.
         .env("OPENSSL_DIR", guard.join("no-openssl"))
         .env("OPENSSL_LIB_DIR", guard.join("no-openssl/lib"))
@@ -115,8 +36,10 @@ fn check_installed(binary: &Path, temp: &Path) -> Result<()> {
         10,
     )?;
     ensure!(
-        !libraries.contains("libssl.") && !libraries.contains("libcrypto."),
-        "installed binary still links OpenSSL: {libraries}"
+        !libraries.contains("libssl.")
+            && !libraries.contains("libcrypto.")
+            && !libraries.contains("libstdc++"),
+        "installed binary still links OpenSSL/C++: {libraries}"
     );
     for flag in ["--version", "--help"] {
         run(
@@ -173,6 +96,9 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         "python3",
         "openssl",
         "pkg-config",
+        "c++",
+        "g++",
+        "clang++",
     ] {
         let path = guard.join(tool);
         fs::write(
@@ -182,21 +108,32 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     }
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut package = Command::new(&cargo);
-    package
-        .current_dir(root())
-        .args([
-            "package",
-            "--locked",
-            "--allow-dirty",
-            "-j",
-            "2",
-            "--target-dir",
-        ])
-        .arg(temp.0.join("package-target"));
-    guarded(&mut package, &guard, &guard_log)?;
-    run(&mut package, temp.0.join("package.log"), 900)?;
+    for package_name in ["randomx-rust", "rx-platform"] {
+        let mut package = Command::new(&cargo);
+        package
+            .current_dir(root())
+            .args([
+                "package",
+                "-p",
+                package_name,
+                "--locked",
+                "--allow-dirty",
+                "-j",
+                "2",
+                "--target-dir",
+            ])
+            .arg(temp.0.join("package-target"));
+        guarded(&mut package, &guard, &guard_log)?;
+        run(
+            &mut package,
+            temp.0.join(format!("{package_name}-package.log")),
+            900,
+        )?;
+    }
 
+    // Backend and platform crates must be published before a registry package of the miner
+    // can resolve them. Verify the standalone Rust crates above, and reproduce
+    // the complete local/Git workspace below without .git or build artifacts.
     // Reproduce the packaged file set without copying .git, build artifacts,
     // generated certificates or environment-specific reports into the Git fixture.
     let mut list = Command::new(&cargo);
@@ -226,6 +163,20 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         fs::create_dir_all(destination.parent().context("package parent")?)?;
         fs::copy(root().join(relative), destination)?;
     }
+    fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let target = destination.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_tree(&entry.path(), &target)?;
+            } else {
+                fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
+    copy_tree(&root().join("crates"), &checkout.join("crates"))?;
     for args in [
         vec!["init", "--quiet", "--initial-branch=main"],
         vec!["add", "--all"],
@@ -281,6 +232,6 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         "installation invoked a blocked tool: {}",
         fs::read_to_string(&guard_log).unwrap_or_default()
     );
-    println!("PASS: package, local/Git install and hashing without Python, CMake, Make, Ninja or OpenSSL");
+    println!("PASS: package, local/Git install and hashing without C++, Python, CMake, Make, Ninja or OpenSSL; ring still uses a C compiler");
     Ok(())
 }

@@ -26,10 +26,10 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Optional native developer targets. Cargo builds the miner through build.rs.
+# Optional reference tools. Cargo builds these sources separately in randomx-cpp.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
    NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-  message(FATAL_ERROR "RxMiner supports Linux x86-64")
+  message(FATAL_ERROR "The optional CMake reference build supports Linux x86-64")
 endif()
 
 set(randomx_sources
@@ -59,9 +59,9 @@ set(randomx_sources
   vm_interpreted.cpp
   vm_interpreted_light.cpp
 )
-list(TRANSFORM randomx_sources PREPEND "${PROJECT_SOURCE_DIR}/src/crypto/randomx/")
-add_library(randomx STATIC ${randomx_sources})
-set(rx_source "${PROJECT_SOURCE_DIR}/src/crypto/randomx")
+list(TRANSFORM randomx_sources PREPEND "${PROJECT_SOURCE_DIR}/crates/randomx-cpp/native/")
+add_library(randomx ${randomx_sources})
+set(rx_source "${PROJECT_SOURCE_DIR}/crates/randomx-cpp/native")
 set_source_files_properties("${rx_source}/jit_compiler_x86_static.S" PROPERTIES LANGUAGE C)
 set_source_files_properties("${rx_source}/argon2_ssse3.c" PROPERTIES COMPILE_OPTIONS "-mssse3")
 set_source_files_properties("${rx_source}/argon2_avx2.c" PROPERTIES COMPILE_OPTIONS "-mavx2")
