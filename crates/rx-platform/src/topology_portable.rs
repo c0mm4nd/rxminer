@@ -1,5 +1,5 @@
 //! Portable worker selection with explicit platform capability boundaries.
-pub use crate::topology_common::{select, summary, use_numa, Core};
+pub use crate::topology_common::{select, summary, Core};
 use anyhow::{ensure, Result};
 use std::io;
 
@@ -28,15 +28,22 @@ pub fn affinity() -> io::Result<Vec<usize>> {
 }
 
 pub fn discover() -> Result<Vec<Core>> {
+    discover_with_warning(|_| {})
+}
+
+pub(super) fn discover_with_warning(warning: impl FnMut(&anyhow::Error)) -> Result<Vec<Core>> {
     let cpus = affinity()?;
     ensure!(!cpus.is_empty(), "no usable CPUs");
     #[cfg(windows)]
     {
+        let mut warning = warning;
         windows::discover(&cpus).or_else(|error| {
-            crate::status!("physical CPU discovery unavailable: {error}; using OS scheduling");
+            warning(&error);
             Ok(unbound(&cpus, cpus.len()))
         })
     }
+    #[cfg(not(windows))]
+    let _ = warning;
     #[cfg(target_os = "macos")]
     let physical = macos::physical_cpus().unwrap_or(cpus.len());
     #[cfg(not(any(windows, target_os = "macos")))]

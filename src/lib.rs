@@ -10,12 +10,7 @@ pub mod proxy;
 pub mod randomx;
 pub mod stratum;
 mod tls;
-#[cfg(target_os = "linux")]
 pub mod topology;
-#[cfg(not(target_os = "linux"))]
-#[path = "topology_portable.rs"]
-pub mod topology;
-mod topology_common;
 
 pub mod logging;
 pub mod runtime;

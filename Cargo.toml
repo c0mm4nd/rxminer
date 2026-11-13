@@ -28,6 +28,7 @@ test-dev-fee = []
 vaes = []
 
 [dependencies]
+rx-platform = { version = "0.1.0", path = "crates/rx-platform" }
 anyhow = "1"
 arc-swap = "1"
 base64 = "0.22"

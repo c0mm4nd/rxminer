@@ -724,6 +724,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rx-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rxminer"
 version = "0.1.1"
 dependencies = [
@@ -739,6 +748,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-native-certs",
+ "rx-platform",
  "serde",
  "serde_json",
  "sha2",
