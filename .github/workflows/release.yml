@@ -123,6 +123,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: verified-release
@@ -131,6 +132,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          name: RxMiner ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          body_path: docs/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
