@@ -494,7 +494,21 @@ mod tests {
                 .lines()
                 .find(|line| line.starts_with("VmFlags:"))
                 .unwrap();
-            assert!(flags.split_whitespace().any(|v| v == "nh"));
+            // Kernels without CONFIG_TRANSPARENT_HUGEPAGE reject this advice
+            // with EINVAL and cannot expose the `nh` flag. Probe support after
+            // taking the smaps snapshot so a successful probe cannot hide a
+            // missing policy application in the allocator itself.
+            // SAFETY: the scratchpad owns this complete page-aligned mapping.
+            let result =
+                unsafe { libc::madvise(first.cast_mut().cast(), HUGE, libc::MADV_NOHUGEPAGE) };
+            if result == 0 {
+                assert!(flags.split_whitespace().any(|v| v == "nh"));
+            } else {
+                let error = io::Error::last_os_error();
+                assert_eq!(error.raw_os_error(), Some(libc::EINVAL), "{error}");
+                assert!(!flags.split_whitespace().any(|v| v == "hg"));
+                eprintln!("kernel rejects MADV_NOHUGEPAGE with EINVAL; THP policy unavailable");
+            }
         }
         drop(a);
         let b = Scratchpad::new(true).unwrap();
