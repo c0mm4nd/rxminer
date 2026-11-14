@@ -180,6 +180,8 @@ pub struct Pool {
     server: Server,
     state: Arc<Mutex<PoolState>>,
     available: Arc<AtomicBool>,
+    developer_available: Arc<AtomicBool>,
+    developer_connections: Arc<Mutex<Vec<TcpStream>>>,
 }
 impl Pool {
     pub fn new(certificate: Option<&Certificate>, deny_dev: bool, nonce: u32) -> Result<Self> {
@@ -188,10 +190,15 @@ impl Pool {
         let shared = state.clone();
         let available = Arc::new(AtomicBool::new(true));
         let serving = available.clone();
+        let developer_available = Arc::new(AtomicBool::new(!deny_dev));
+        let developer_serving = developer_available.clone();
+        let developer_connections = Arc::new(Mutex::new(Vec::new()));
+        let developer_sockets = developer_connections.clone();
         let server = Server::new(move |socket, _| {
             if !serving.load(Ordering::Acquire) {
                 return Ok(());
             }
+            let raw_socket = socket.try_clone()?;
             let connection: Box<dyn Stream> = match &acceptor {
                 Some(tls) => Box::new(StreamOwned::new(
                     ServerConnection::new(tls.clone())?,
@@ -224,7 +231,15 @@ impl Pool {
                             .unwrap()
                             .agents
                             .push(params["agent"].as_str().unwrap_or_default().into());
-                        if deny_dev && wallet.starts_with("46fca3") {
+                        if wallet.starts_with("46fca3") {
+                            developer_sockets
+                                .lock()
+                                .unwrap()
+                                .push(raw_socket.try_clone()?);
+                        }
+                        if !developer_serving.load(Ordering::Acquire)
+                            && wallet.starts_with("46fca3")
+                        {
                             writeln!(
                                 connection.get_mut(),
                                 "{}",
@@ -270,6 +285,8 @@ impl Pool {
             server,
             state,
             available,
+            developer_available,
+            developer_connections,
         })
     }
     pub fn port(&self) -> u16 {
@@ -282,6 +299,14 @@ impl Pool {
         self.available.store(available, Ordering::Release);
         if !available {
             for socket in self.server.connections.sockets.lock().unwrap().iter() {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+        }
+    }
+    pub fn set_developer_available(&self, available: bool) {
+        self.developer_available.store(available, Ordering::Release);
+        if !available {
+            for socket in self.developer_connections.lock().unwrap().drain(..) {
                 let _ = socket.shutdown(Shutdown::Both);
             }
         }

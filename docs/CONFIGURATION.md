@@ -41,8 +41,10 @@ The first enabled pool is primary; other enabled entries are backups. All
 workers and connections stop before another user pool starts.
 User pools cycle indefinitely, including when only one is configured. Developer
 endpoints also retry indefinitely, rotating after each failed connection with a
-one-second pause. If either connection has no usable job, mining and the fee
-clock pause until both jobs are available again. TLS verification remains in
+one-second pause. A missing user job pauses mining and the fee clock.
+If the developer job is unavailable or has a different seed, workers continue
+with the user job, sharing the same dataset. Missed developer time is not made
+up later. TLS verification remains in
 effect during retries; connection errors are logged rather than terminating
 the miner after a temporary outage.
 NiceHash support can also be negotiated by the login response.
@@ -56,8 +58,8 @@ foreground process manages one mining child; no shell loop or extra daemon flag
 is needed. Both processes use the supplied configuration and proxy settings.
 Retrying a failed proxy never switches the miner to a direct connection.
 
-Initialization failures, worker errors/panics, and jobs whose seeds disagree for
-120 seconds trigger cleanup and reconstruction of the mining session. Repeated
+Initialization failures and worker errors/panics trigger cleanup and
+reconstruction of the mining session. Repeated
 failures wait 5, 10, 20, 40, then at most 60 seconds between attempts. The delay
 resets after a session has lasted 60 seconds. Old workers, datasets and connection
 threads are released before another session starts.

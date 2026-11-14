@@ -154,7 +154,7 @@ impl Client {
                             if dev {
                                 // An outage can affect every endpoint (for example,
                                 // a local proxy restart). Keep cycling: the miner
-                                // pauses work and its fee clock until jobs return.
+                                // keeps user work running while these endpoints recover.
                                 pool_index = (pool_index + 1) % pools.len();
                                 crate::status!(
                                     "[net] developer connection: {error:#}; retrying {} in {}s",

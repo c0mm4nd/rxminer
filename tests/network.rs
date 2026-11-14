@@ -260,8 +260,8 @@ fn protocol_and_fee_windows() -> Result<()> {
 fn rejected_connections() -> Result<()> {
     let temp = TempDir::new("rejections")?;
     let cert = Certificate::new(&temp.0)?;
-    for name in ["untrusted-cert", "wrong-pin", "denied-dev"] {
-        let pool = Pool::new(Some(&cert), name == "denied-dev", 0)?;
+    for name in ["untrusted-cert", "wrong-pin"] {
+        let pool = Pool::new(Some(&cert), false, 0)?;
         let mut command = miner_command(binary())?;
         command
             .arg("-o")
@@ -314,6 +314,75 @@ fn rejected_connections() -> Result<()> {
         miner.success(15)?;
         println!("PASS {name}");
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "developer-only rejection, outage and recovery without idling user workers"]
+fn developer_outage_keeps_user_mining() -> Result<()> {
+    let temp = TempDir::new("developer-outage")?;
+    let pool = Pool::new(None, true, 0)?;
+    let api = Api {
+        port: port()?,
+        token: "developer-outage-token".into(),
+        certificate: None,
+    };
+    let mut command = miner_command(binary())?;
+    command
+        .arg("-o")
+        .arg(format!("127.0.0.1:{}", pool.port()))
+        .args([
+            "-u",
+            "test-wallet",
+            "-t",
+            "2",
+            "--randomx-mode",
+            "light",
+            "--randomx-no-numa",
+            "--no-huge-pages",
+            "--no-proxy",
+            "--http-port",
+        ])
+        .arg(api.port.to_string())
+        .arg("--http-access-token")
+        .arg(&api.token);
+    let mut miner = Process::spawn(&mut command, temp.0.join("miner.log"))?;
+    let initial = api.wait_for(&mut miner, 30, |s| {
+        s["shares"]["accepted"].as_u64().unwrap_or(0) > 0 && s["paused"] == false
+    })?;
+    assert_eq!(initial["dev_pool"]["connected"], false);
+    assert_eq!(initial["dev_fee"]["phase"], "user");
+    let pid = worker_pid(&miner);
+    // Recovery resumes fee windows without allocating another dataset.
+    pool.set_developer_available(true);
+    api.wait_for(&mut miner, 30, |s| shares_ready(s, 2))?;
+    pool.set_developer_available(false);
+    let disconnected = api.wait_for(&mut miner, 10, |s| {
+        s["dev_pool"]["connected"] == false && s["dev_fee"]["phase"] == "user"
+    })?;
+    // Cover a complete accelerated fee cycle while only the developer pool is down.
+    for _ in 0..12 {
+        thread::sleep(Duration::from_millis(500));
+        miner.ensure_running()?;
+        let s = api.get("/summary")?;
+        assert_eq!(s["paused"], false);
+        assert_eq!(s["dev_fee"]["phase"], "user");
+    }
+    let after = api.get("/summary")?;
+    assert!(after["hashes"].as_u64() > disconnected["hashes"].as_u64());
+    assert!(after["shares"]["accepted"].as_u64() > disconnected["shares"]["accepted"].as_u64());
+    assert_eq!(
+        after["dev_shares"]["accepted"],
+        disconnected["dev_shares"]["accepted"]
+    );
+    assert_eq!(worker_pid(&miner), pid);
+    assert_eq!(miner.output().matches("dataset(s) ready").count(), 1);
+    pool.set_developer_available(true);
+    api.wait_for(&mut miner, 30, |s| {
+        s["dev_shares"]["accepted"].as_u64() > after["dev_shares"]["accepted"].as_u64()
+    })?;
+    miner.signal(libc::SIGINT)?;
+    miner.success(15)?;
     Ok(())
 }
 
