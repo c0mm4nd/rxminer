@@ -20,10 +20,12 @@ concurrency:
 
 jobs:
   native:
-    name: Package ${{ matrix.platform }}
+    name: Package ${{ matrix.platform }} / ${{ matrix.backend }}
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64]
+        backend: [rust, cpp]
         include:
           - platform: linux-x86_64
             os: ubuntu-24.04
@@ -42,6 +44,9 @@ jobs:
             exe: '.exe'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      BACKEND: ${{ matrix.backend }}
+      RXMINER_ARCH: default
     defaults:
       run:
         shell: bash
@@ -53,25 +58,27 @@ jobs:
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential
-      - name: Rust checks and production build
+      - name: Check selected backend
         run: |
           cargo fmt --all --check
-          cargo clippy -p rxminer -p randomx-rust --locked --all-targets -- -D warnings
-          cargo build --release --locked
-          cargo test --release --locked
-      - name: Rust backend unit tests
-        run: cargo test -p randomx-rust --locked --release
+          cargo clippy -p rxminer -p "randomx-$BACKEND" -p rx-platform --locked --all-targets --no-default-features --features "rxminer/randomx-$BACKEND" -- -D warnings
+          cargo test -p rxminer --release --locked --no-default-features --features "randomx-$BACKEND"
+          cargo test -p "randomx-$BACKEND" -p rx-platform --locked --release
       - name: Rust complete upstream hash vectors
+        if: matrix.backend == 'rust'
         run: cargo test -p randomx-rust --locked --release --lib upstream_full_hashes -- --ignored --nocapture
       - name: Light and full-memory CLI smoke
         timeout-minutes: 40
-        run: cargo test --locked --release --test portable -- --ignored --nocapture
+        run: cargo test --locked --release --no-default-features --features "randomx-$BACKEND" --test portable -- --ignored --nocapture
       - name: Local protocol and failover regression
         if: matrix.platform == 'linux-x86_64'
-        run: cargo test --locked --release --features test-dev-fee --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
+        run: cargo test --locked --release --no-default-features --features "randomx-$BACKEND,test-dev-fee" --test network --target-dir target/test-dev -- --ignored --test-threads=1 --nocapture
+      - name: Build production binary with exactly one backend
+        run: cargo build --release --locked --no-default-features --features "randomx-$BACKEND"
       - uses: ./.github/actions/package
         with:
           platform: ${{ matrix.platform }}
+          backend: ${{ matrix.backend }}
           exe: ${{ matrix.exe }}
 
   # Enqueue only after all ordinary packages pass; do not spend RISE capacity
@@ -83,8 +90,34 @@ jobs:
     with:
       package: true
 
-  draft:
+  verify:
     needs: [native, riscv]
+    if: ${{ always() && !cancelled() && needs.native.result == 'success' && (needs.riscv.result == 'success' || needs.riscv.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify complete backend matrix and checksums
+        env:
+          INCLUDE_RISCV: ${{ needs.riscv.result == 'success' }}
+        run: |
+          python3 -m unittest discover -s .github/release -p 'test_*.py'
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          args=()
+          if [[ "$INCLUDE_RISCV" == true ]]; then args+=(--riscv); fi
+          python3 .github/release/verify.py dist --version "$version" --commit "$(git rev-parse HEAD)" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release
+          path: dist/*
+          if-no-files-found: error
+
+  draft:
+    needs: verify
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
@@ -92,22 +125,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-*
+          name: verified-release
           path: dist
-          merge-multiple: true
-      - name: Verify all six packages and checksums
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          cd dist
-          for platform in linux-x86_64 linux-aarch64 linux-riscv64 macos-x86_64 macos-aarch64 windows-x86_64; do
-            extension=tar.gz
-            if [[ "$platform" == windows-* ]]; then extension=zip; fi
-            name="rxminer-${RELEASE_TAG}-${platform}.${extension}"
-            test -s "$name"
-            sha256sum -c "$name.sha256"
-          done
-          sha256sum *.tar.gz *.zip > SHA256SUMS
       - name: Upload complete release draft
         uses: softprops/action-gh-release@v2
         with:

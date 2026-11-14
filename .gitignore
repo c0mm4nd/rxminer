@@ -9,3 +9,4 @@ randomx-ref/
 *.o
 *.a
 dist/
+__pycache__/

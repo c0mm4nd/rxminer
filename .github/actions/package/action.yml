@@ -4,6 +4,9 @@ inputs:
   platform:
     description: Archive platform suffix
     required: true
+  backend:
+    description: RandomX implementation (rust or cpp)
+    required: true
   exe:
     description: Executable suffix
     default: ''
@@ -14,6 +17,7 @@ runs:
       shell: bash
       env:
         RELEASE_PLATFORM: ${{ inputs.platform }}
+        RELEASE_BACKEND: ${{ inputs.backend }}
         EXE_SUFFIX: ${{ inputs.exe }}
         RELEASE_REF: ${{ github.ref }}
         RELEASE_TAG: ${{ github.ref_name }}
@@ -23,21 +27,34 @@ runs:
         if [[ "$RELEASE_REF" == refs/tags/* ]]; then
           test "$RELEASE_TAG" = "v$version"
         fi
-        name="rxminer-v${version}-${RELEASE_PLATFORM}"
+        case "$RELEASE_BACKEND" in rust|cpp) ;; *) exit 1 ;; esac
+        name="rxminer-v${version}-${RELEASE_PLATFORM}-${RELEASE_BACKEND}"
         mkdir -p "dist/$name"
         cp "target/release/rxminer${EXE_SUFFIX}" README.md LICENSE Cargo.lock config.example.json "dist/$name/"
-        cp crates/randomx-rust/src/randomx_core/LICENSE "dist/$name/LICENSE-RandomX"
+        if [[ "$RELEASE_BACKEND" == cpp ]]; then
+          cp crates/randomx-cpp/native/LICENSE "dist/$name/LICENSE-RandomX"
+        else
+          cp crates/randomx-rust/src/randomx_core/LICENSE "dist/$name/LICENSE-RandomX"
+        fi
         cp .github/release/LICENSE-ring .github/release/LICENSE-rustls .github/release/LICENSE-webpki "dist/$name/"
         cp -r docs "dist/$name/"
+        release_python=python3
+        if [[ "$RUNNER_OS" == Windows ]]; then release_python=python; fi
+        "$release_python" .github/release/metadata.py --platform "$RELEASE_PLATFORM" --backend "$RELEASE_BACKEND" --version "$version" > "dist/$name/build-info.json"
         echo "PACKAGE_NAME=$name" >> "$GITHUB_ENV"
         echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+        echo "PACKAGE_BACKEND=$RELEASE_BACKEND" >> "$GITHUB_ENV"
     - name: Check macOS dependencies
       if: runner.os == 'macOS'
       shell: bash
       run: |
         otool -L "dist/$PACKAGE_NAME/rxminer" | tee "$RUNNER_TEMP/release-dependencies.txt"
-        if grep -E 'lib(ssl|crypto|c\+\+)|/opt/homebrew/|/usr/local/' "$RUNNER_TEMP/release-dependencies.txt"; then
+        if grep -E 'lib(ssl|crypto)|/opt/homebrew/|/usr/local/' "$RUNNER_TEMP/release-dependencies.txt"; then
           echo 'Unexpected non-system runtime dependency' >&2
+          exit 1
+        fi
+        if [[ "$PACKAGE_BACKEND" == rust ]] && grep -F 'libc++' "$RUNNER_TEMP/release-dependencies.txt"; then
+          echo 'Rust package unexpectedly links the C++ runtime' >&2
           exit 1
         fi
         codesign --force --sign - "dist/$PACKAGE_NAME/rxminer"
@@ -72,15 +89,19 @@ runs:
             shasum -a 256 -c "$PACKAGE_NAME.tar.gz.sha256"
           fi
         )
-        check="$RUNNER_TEMP/release-unpacked"
+        check="$RUNNER_TEMP/release-unpacked-$PACKAGE_NAME"
         mkdir -p "$check"
         tar -xzf "dist/$PACKAGE_NAME.tar.gz" -C "$check"
         binary="$check/$PACKAGE_NAME/rxminer"
         test "$("$binary" --version)" = "rxminer $PACKAGE_VERSION"
         if [[ "$RUNNER_OS" == Linux ]]; then
           ldd "$binary" | tee "$RUNNER_TEMP/release-dependencies.txt"
-          if grep -E 'lib(ssl|crypto|stdc\+\+)\.' "$RUNNER_TEMP/release-dependencies.txt"; then
-            echo 'Unexpected OpenSSL/C++ runtime dependency' >&2
+          if grep -E 'lib(ssl|crypto)\.|not found' "$RUNNER_TEMP/release-dependencies.txt"; then
+            echo 'Unexpected OpenSSL or missing runtime dependency' >&2
+            exit 1
+          fi
+          if [[ "$PACKAGE_BACKEND" == rust ]] && grep -F 'libstdc++' "$RUNNER_TEMP/release-dependencies.txt"; then
+            echo 'Rust package unexpectedly links the C++ runtime' >&2
             exit 1
           fi
         fi
@@ -88,6 +109,9 @@ runs:
           > "$RUNNER_TEMP/release-smoke.log" 2>&1
         cat "$RUNNER_TEMP/release-smoke.log"
         grep -E 'benchmark finished: [1-9][0-9]* hashes' "$RUNNER_TEMP/release-smoke.log"
+        marker='[rx] Rust backend'
+        if [[ "$PACKAGE_BACKEND" == cpp ]]; then marker='[rx] C++ backend'; fi
+        grep -F "$marker" "$RUNNER_TEMP/release-smoke.log"
     - name: Archive and verify Windows package without development PATH
       if: runner.os == 'Windows'
       shell: pwsh
@@ -96,7 +120,7 @@ runs:
         Compress-Archive -Path "dist/$env:PACKAGE_NAME" -DestinationPath $archive
         $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $env:PACKAGE_NAME.zip`n" | Set-Content "$archive.sha256" -Encoding ascii -NoNewline
-        $check = Join-Path $env:RUNNER_TEMP 'release-unpacked'
+        $check = Join-Path $env:RUNNER_TEMP "release-unpacked-$env:PACKAGE_NAME"
         Expand-Archive $archive $check
         $binary = Join-Path $check "$env:PACKAGE_NAME/rxminer.exe"
         $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
@@ -108,11 +132,15 @@ runs:
         if (!(Select-String -Path "$env:RUNNER_TEMP/release-smoke.log" -Pattern 'benchmark finished: [1-9][0-9]* hashes')) {
           throw 'Packaged miner produced no hashes'
         }
+        $marker = if ($env:PACKAGE_BACKEND -eq 'cpp') { '[rx] C++ backend' } else { '[rx] Rust backend' }
+        if (!(Select-String -Path "$env:RUNNER_TEMP/release-smoke.log" -SimpleMatch $marker)) {
+          throw 'Packaged miner has the wrong RandomX backend'
+        }
     - uses: actions/upload-artifact@v4
       with:
-        name: release-${{ inputs.platform }}
+        name: release-${{ inputs.platform }}-${{ inputs.backend }}
         path: |
-          dist/*.tar.gz
-          dist/*.zip
-          dist/*.sha256
+          dist/${{ env.PACKAGE_NAME }}.tar.gz
+          dist/${{ env.PACKAGE_NAME }}.zip
+          dist/${{ env.PACKAGE_NAME }}.*.sha256
         if-no-files-found: error

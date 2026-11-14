@@ -53,6 +53,10 @@ For a binary used only on the build machine, add `RUSTFLAGS='-C target-cpu=nativ
 Backend-specific development and testing commands are in
 [the development guide](docs/DEVELOPMENT.md).
 
+Release archives identify the backend with `-rust` or `-cpp` in their filenames.
+Both variants use the same CLI and configuration. See the
+[release matrix](docs/DEVELOPMENT.md#release-variants) for platforms and validation.
+
 ## Usage
 
 ```bash

@@ -126,10 +126,19 @@ jobs:
           printf '| Check | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
           jq -r 'to_entries[] | "| \(.key) | \(.value.outcome) |"' <<< "$STEP_RESULTS" >> "$GITHUB_STEP_SUMMARY"
           jq -e 'all(.[]; .outcome == "success")' <<< "$STEP_RESULTS"
-      - name: Production release binary
+      - name: Production Rust release binary
         if: inputs.package
-        run: cargo build --release --locked
+        run: cargo build --release --locked --no-default-features --features randomx-rust
       - uses: ./.github/actions/package
         if: inputs.package
         with:
           platform: linux-riscv64
+          backend: rust
+      - name: Production C++ release binary
+        if: inputs.package
+        run: cargo build --release --locked --no-default-features --features randomx-cpp
+      - uses: ./.github/actions/package
+        if: inputs.package
+        with:
+          platform: linux-riscv64
+          backend: cpp

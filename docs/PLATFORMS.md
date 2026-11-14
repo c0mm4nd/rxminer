@@ -77,12 +77,18 @@ GPU mining, other algorithms and Windows ARM64 validation remain outside scope.
 
 ## Packaging and TLS
 
-Local workflow definitions target Linux x86-64, ARM64 and RV64, macOS Intel and
-Apple Silicon, and Windows x64. Release packaging currently selects the default
-Rust feature: those Linux binaries must not link libstdc++, OpenSSL or libcrypto.
-C++ feature builds may link the platform C++ runtime. Windows packaging retains the Visual Studio runtime bundle until
-its dependencies can be checked on Windows. macOS packages are ad-hoc signed.
-None of these updated migration packages has been published.
+Release workflows build separate `rust` and `cpp` archives for Linux x86-64 and
+ARM64, macOS Intel and Apple Silicon, and Windows x64. The optional native RV64
+batch produces both backends too. Archive names end in `-<platform>-<backend>`;
+each contains `build-info.json` with the source commit, target and Cargo feature.
+See [release validation](DEVELOPMENT.md#release-variants) for the complete matrix.
+
+Rust Linux binaries must not link libstdc++, OpenSSL or libcrypto. C++ packages
+may link the system C++ runtime; neither backend may link OpenSSL. Windows
+archives bundle the Visual Studio runtime and are smoke-tested after extraction
+with the development tools removed from PATH. macOS archives are ad-hoc signed.
+Linux binaries use the GNU ABI of their build runner (currently Ubuntu 24.04);
+these are not static musl or older-glibc compatibility builds.
 
 TLS uses rustls with ring and platform roots from rustls-native-certs.
 `SSL_CERT_FILE` and `SSL_CERT_DIR` override native root loading; `--tls-ca`
@@ -94,10 +100,9 @@ it does not link OpenSSL.
 
 The C++ backend passed the [six-job native CI run](https://github.com/c0mm4nd/rxminer/actions/runs/42283459720).
 The RV64GC JIT passed the [RISC-V validation batch](https://github.com/c0mm4nd/rxminer/actions/runs/42358525166).
-Those results cover the previous implementation. C++ remains only as an optional
-Linux x86-64 reference build in the full checkout; see [development](DEVELOPMENT.md).
+Those results cover the previous implementation. Both current backend crates
+have their own CI checks; see [development](DEVELOPMENT.md).
 
 The RISC-V workflow still queues only on explicit dispatch or a release batch.
-Do not dispatch migration workflows or publish migration commits without a new
-publication request. Hosted-runner checks establish functional behavior, not
+Hosted-runner checks establish functional behavior, not
 comparable mining performance or privileged page/MSR availability.

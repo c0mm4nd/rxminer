@@ -39,6 +39,8 @@ jobs:
           rustup toolchain install '${{ matrix.rust }}' --profile minimal --component rustfmt --component clippy
           rustup default '${{ matrix.rust }}'
       - run: cargo fmt --all --check
+      - name: Release archive validator regressions
+        run: python3 -m unittest discover -s .github/release -p 'test_*.py'
       - name: Standalone Rust RandomX core
         run: |
           rustc --edition=2021 -O --test crates/randomx-rust/src/randomx_core/mod.rs -o "$RUNNER_TEMP/randomx-core-tests"
