@@ -79,12 +79,20 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         run: cargo test -p randomx-rust --locked --release --lib upstream_full_hashes -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/native.log"
-      - name: Rust full datasets and worker lifecycle
+      - name: Rust full datasets, JIT and allocator policy
         id: consensus
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 40
-        run: cargo test -p randomx-rust -p rxminer -p rx-platform --locked --release --lib -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/consensus.log"
+        run: cargo test -p randomx-rust -p rx-platform --locked --release --lib -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/consensus.log"
+      # Dataset construction takes several minutes on baseline RV64 runners.
+      # Keep all lifecycle cases, with a budget independent of the core suite.
+      - name: Miner full datasets and worker lifecycle
+        id: lifecycle
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 70
+        run: cargo test -p rxminer --locked --release --lib -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/riscv-logs/lifecycle.log"
       - name: Light and full-memory CLI mining
         id: mining
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
