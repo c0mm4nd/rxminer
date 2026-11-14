@@ -3,10 +3,16 @@
 #include "randomx.h"
 #include "virtual_machine.hpp"
 #include <cfenv>
+#if defined(__SSE2__) || defined(_M_X64)
+#include <xmmintrin.h>
+#endif
 
 namespace {
 struct FloatState {
-#ifdef USE_CSR_INTRINSICS
+#if defined(__SSE2__) || defined(_M_X64)
+    // USE_CSR_INTRINSICS is local to randomx.cpp, not a build definition.
+    // SSE2 RandomX changes only MXCSR; avoid saving/restoring the unrelated
+    // x87 environment through libc on every pipelined hash.
     unsigned int saved = _mm_getcsr();
     ~FloatState() { _mm_setcsr(saved); }
 #else
