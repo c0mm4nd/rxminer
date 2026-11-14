@@ -1,12 +1,15 @@
-# RxMiner v0.2.0-rc.2
+# RxMiner v0.2.0-rc.3
 
-Second release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
+Third release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
 pre-release for validation before the stable v0.2.0 release.
 
-The rc.1 candidate did not become a public release: native RISC-V validation exposed a test that
-assumed every Linux kernel supports transparent huge pages. This candidate
-checks kernel support while retaining the allocator policy assertion where THP
-is available. Mining code is unchanged from rc.1.
+The first two candidates did not become public releases. Native RISC-V
+validation exposed a test assumption about transparent huge pages, then the
+combined dataset/lifecycle suite exceeded its 40-minute CI budget. This
+candidate checks kernel THP support and gives the complete core and lifecycle
+suites separate time budgets. HTTPS tests also finish loading system
+certificates before starting the handshake deadline. Mining code is unchanged
+from rc.1.
 
 ## Changes since v0.1.1
 
@@ -30,7 +33,7 @@ is available. Mining code is unchanged from rc.1.
 
 Choose the platform and backend in the filename:
 
-`rxminer-v0.2.0-rc.2-<platform>-<rust|cpp>.<tar.gz|zip>`
+`rxminer-v0.2.0-rc.3-<platform>-<rust|cpp>.<tar.gz|zip>`
 
 Both variants are built for Linux x86-64, ARM64 and RV64, macOS Intel and Apple
 Silicon, and Windows x64. Each archive is extracted and tested before upload;
