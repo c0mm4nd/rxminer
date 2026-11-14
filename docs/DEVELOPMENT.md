@@ -19,7 +19,9 @@ cargo test -p rxminer -p randomx-rust -p rx-platform --locked --release --featur
 ```
 
 Use optimized tests for the portable interpreter. Test builds with `test-dev-fee`
-are local-only and must not be distributed. Release builds use default features.
+are local-only and must not be distributed. Release builds explicitly select
+exactly one backend using `--no-default-features --features randomx-rust` or
+`--no-default-features --features randomx-cpp`.
 
 ## Backend crates and feature checks
 
@@ -190,3 +192,45 @@ C++ reference for Rust differential tests; platform jobs run vectors and
 full/light contracts. Check the GitHub Actions result for the exact commit under
 review. Historical C++ results do not validate the Rust ports or the new crate
 boundaries. See [platform support](PLATFORMS.md).
+
+## Release variants
+
+The release workflow builds two backend variants for each native platform:
+
+| Platform | Runner | Archives |
+| --- | --- | --- |
+| Linux x86-64 | Ubuntu 24.04 | `linux-x86_64-rust.tar.gz`, `linux-x86_64-cpp.tar.gz` |
+| Linux ARM64 | Ubuntu 24.04 ARM | `linux-aarch64-rust.tar.gz`, `linux-aarch64-cpp.tar.gz` |
+| macOS Intel | macOS 15 Intel | `macos-x86_64-rust.tar.gz`, `macos-x86_64-cpp.tar.gz` |
+| macOS Apple Silicon | macOS 15 | `macos-aarch64-rust.tar.gz`, `macos-aarch64-cpp.tar.gz` |
+| Windows x64 | Windows Server 2022 | `windows-x86_64-rust.zip`, `windows-x86_64-cpp.zip` |
+| Linux RV64 (optional native batch) | Ubuntu 24.04 RISC-V | `linux-riscv64-rust.tar.gz`, `linux-riscv64-cpp.tar.gz` |
+
+Every filename is prefixed with `rxminer-v<VERSION>-`. Runtime mode, JIT,
+AES and page settings remain CLI/configuration choices within each binary;
+they do not require separate archives. These are portable compiler-default
+builds, without `target-cpu=native` or `RXMINER_ARCH=native` tuning.
+
+Use Actions → **release** → **Run workflow** to validate a branch. By default
+this produces ten archives, their `.sha256` sidecars, and the `verified-release`
+artifact containing the complete set plus `SHA256SUMS`. Set `riscv=true` to
+queue the native RV64 batch after the ordinary matrix succeeds (twelve archives).
+Manual dispatch uploads Actions artifacts and does not create a GitHub release.
+
+Each package is extracted and tested with `--version` and offline light hashing.
+The smoke output must identify the selected backend. Linux/macOS dependencies,
+macOS signatures and Windows runtime DLLs are checked during packaging.
+`build-info.json` records version, backend, explicit Cargo feature, target,
+commit and compiler. Final verification rejects missing/extra variants,
+checksum mismatches, wrong build identity and test-feature metadata.
+
+Tags matching `v*` must agree with Cargo's package version. Tag builds require
+the RV64 batch, validate all twelve archives, and only then create a **draft**
+GitHub release. A failed or unavailable native runner prevents a complete draft;
+the workflow does not silently publish a partial matrix.
+
+The archive validator has small local regression fixtures:
+
+```bash
+python3 -m unittest discover -s .github/release -p 'test_*.py'
+```
