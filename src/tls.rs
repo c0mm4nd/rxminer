@@ -519,6 +519,9 @@ mod tests {
     #[test]
     fn https_authentication_and_stalled_handshake_shutdown() {
         let fixture = Fixture::new(false);
+        // macOS system certificate loading can exceed the server's handshake
+        // deadline on a busy runner. Finish client setup before opening a socket.
+        let client = client_config(&fixture.client(true, fixture.pin())).unwrap();
         let control = crate::control::Control::new(Arc::new(AtomicBool::new(false)));
         let server = crate::http::Server::start_tls(
             "127.0.0.1",
@@ -537,11 +540,8 @@ mod tests {
             socket
                 .set_write_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            let conn = ClientConnection::new(
-                client_config(&fixture.client(true, fixture.pin())).unwrap(),
-                "localhost".try_into().unwrap(),
-            )
-            .unwrap();
+            let conn =
+                ClientConnection::new(client.clone(), "localhost".try_into().unwrap()).unwrap();
             let mut tls = StreamOwned::new(conn, socket);
             write!(
                 tls,
