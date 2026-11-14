@@ -1,15 +1,23 @@
-# RxMiner v0.2.0-rc.3
+# RxMiner v0.2.0-rc.4
 
-Third release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
+Fourth release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
 pre-release for validation before the stable v0.2.0 release.
 
-The first two candidates did not become public releases. Native RISC-V
-validation exposed a test assumption about transparent huge pages, then the
-combined dataset/lifecycle suite exceeded its 40-minute CI budget. This
-candidate checks kernel THP support and gives the complete core and lifecycle
-suites separate time budgets. HTTPS tests also finish loading system
-certificates before starting the handshake deadline. Mining code is unchanged
-from rc.1.
+## Changes since rc.3
+
+- Keep user mining active when the developer pool disconnects, rejects login,
+  has no job, or reports a different RandomX seed. Developer windows reuse the
+  user's dataset; missed developer time is not made up after recovery.
+- Preserve the existing pause and recovery behavior when user work is
+  unavailable. Developer endpoint failures no longer require both pools to
+  recover before user work can resume.
+- Use the intended MXCSR save/restore path in the C++ bridge on SSE2 platforms,
+  avoiding full libc floating-point environment calls for each pipelined hash.
+  Exception handling and exact caller floating-point state restoration remain
+  covered by the backend contract tests.
+- Add developer-only outage and recovery regression coverage, including
+  continued user shares, nonce continuity, and dataset reuse. Both backends
+  retain the existing TLS, proxy, runtime control and supervisor checks.
 
 ## Changes since v0.1.1
 
@@ -20,7 +28,7 @@ from rc.1.
 - Use rustls for TLS, removing the OpenSSL library dependency. TLS still uses
   ring's native cryptographic kernels.
 - Keep retrying user and developer pool connections through network outages.
-  Mining and the fee clock pause when required jobs are unavailable.
+  Mining and the fee clock pause when user jobs are unavailable.
 - Run under a built-in Rust foreground supervisor by default. Failed mining
   sessions are rebuilt; crashed or killed mining children are restarted with
   bounded delays. Explicit signals and authenticated API stop remain supported.
@@ -33,7 +41,7 @@ from rc.1.
 
 Choose the platform and backend in the filename:
 
-`rxminer-v0.2.0-rc.3-<platform>-<rust|cpp>.<tar.gz|zip>`
+`rxminer-v0.2.0-rc.4-<platform>-<rust|cpp>.<tar.gz|zip>`
 
 Both variants are built for Linux x86-64, ARM64 and RV64, macOS Intel and Apple
 Silicon, and Windows x64. Each archive is extracted and tested before upload;
