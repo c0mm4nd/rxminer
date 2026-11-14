@@ -166,6 +166,10 @@ public pools. Coverage includes TLS rejection, HTTP CONNECT/SOCKS5, shares,
 nonce continuity, failover, NiceHash, keepalive, authenticated HTTPS control,
 pause/resume, reload, background mode and autosave. Fixtures accept shares
 without checking proof-of-work; hash correctness is covered separately.
+Recovery checks occupy the HTTP listener and fix its port during retry backoff,
+kill the mining child to verify the default foreground supervisor,
+and stop only the parent during mining and retry delays. Unit tests inject
+coordinator panics and verify monitor cleanup and bounded recovery delays.
 
 ## Packaging and Cargo installation
 

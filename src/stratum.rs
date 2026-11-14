@@ -124,7 +124,7 @@ impl Client {
             .spawn(move || {
                 let _panic = control.watch_thread("Stratum worker");
                 let mut session = 0;
-                let mut failures = 0;
+                let mut failures = 0usize;
                 let mut pool_index = 0;
                 while !thread_stop.stopped() && !control.stopped() {
                     let options = &pools[pool_index];
@@ -145,21 +145,21 @@ impl Client {
                     if thread_state.connected.load(Ordering::Acquire) {
                         failures = 0;
                     }
-                    failures += 1;
+                    failures = failures.saturating_add(1);
                     thread_stop.clear();
                     thread_state.connected.store(false, Ordering::Release);
                     thread_state.job.store(None);
                     if let Err(error) = result {
                         if !control.stopped() && !thread_stop.stopped() {
                             if dev {
-                                if failures >= pools.len() {
-                                    control.fail("required pool connection unavailable");
-                                    break;
-                                }
+                                // An outage can affect every endpoint (for example,
+                                // a local proxy restart). Keep cycling: the miner
+                                // pauses work and its fee clock until jobs return.
                                 pool_index = (pool_index + 1) % pools.len();
                                 crate::status!(
-                                    "[net] developer connection: {error:#}; switching to {}",
-                                    pools[pool_index].address.authority()
+                                    "[net] developer connection: {error:#}; retrying {} in {}s",
+                                    pools[pool_index].address.authority(),
+                                    options.retry_pause
                                 );
                             } else {
                                 crate::status!("[net] user connection: {error:#}");
@@ -585,7 +585,9 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_developer_endpoints_stop_mining() {
+    fn developer_recovers_after_every_endpoint_fails_repeatedly() {
+        use std::io::{BufRead, BufReader};
+
         let listeners: Vec<_> = (0..2)
             .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
             .collect();
@@ -604,17 +606,57 @@ mod tests {
                 pool
             })
             .collect();
-        drop(listeners);
+        let (release, released) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for listener in &listeners {
+                listener.set_nonblocking(true).unwrap();
+            }
+            // Fail two complete rounds, then allow the first endpoint to recover.
+            for attempt in 0..5 {
+                let listener = &listeners[attempt % listeners.len()];
+                let mut socket = None;
+                await_condition(|| match listener.accept() {
+                    Ok((peer, _)) => {
+                        socket = Some(peer);
+                        true
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+                    Err(e) => panic!("accept: {e}"),
+                });
+                let socket = socket.unwrap();
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut peer = BufReader::new(socket);
+                let mut line = String::new();
+                peer.read_line(&mut line).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["method"],
+                    "login"
+                );
+                if attempt == 4 {
+                    writeln!(
+                        peer.get_mut(),
+                        "{}",
+                        json!({"id":1,"result":{"id":"recovered",
+                        "job":{"job_id":"job", "blob":"00".repeat(76),
+                        "seed_hash":"00".repeat(32), "target":"ffffffff"}}})
+                    )
+                    .unwrap();
+                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+            }
+        });
         let control = Control::new(Arc::new(AtomicBool::new(false)));
         let mut client = Client::start_developer(pools, control.clone()).unwrap();
-        await_condition(|| control.stopped());
-        assert_eq!(
-            control.error().as_deref(),
-            Some("required pool connection unavailable")
-        );
-        assert!(!client.state.connected.load(Ordering::Acquire));
-        assert!(client.state.job.load_full().is_none());
+        await_condition(|| client.state.connected.load(Ordering::Acquire));
+        assert!(!control.stopped());
+        assert!(control.error().is_none());
+        assert_eq!(client.state.job.load_full().unwrap().session, 5);
         client.stop();
+        release.send(()).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

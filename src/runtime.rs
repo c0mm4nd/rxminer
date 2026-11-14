@@ -6,13 +6,14 @@ use anyhow::{Context, Result};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    panic::{catch_unwind, AssertUnwindSafe},
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -138,18 +139,115 @@ fn autosave(options: &Options, cli: &Cli) -> Result<()> {
 }
 
 pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> {
+    // Finite benchmarks must still report failure (including checksum errors).
+    let recover = options.benchmark.is_none();
+    let mut observed = cli.config.as_ref().and_then(|p| fs::read(p).ok());
+    supervise(
+        &stop,
+        recover,
+        || run_session(&mut options, &cli, &mut observed, stop.clone()),
+        wait_for_retry,
+    )
+}
+
+fn supervise(
+    stop: &AtomicBool,
+    recover: bool,
+    mut attempt: impl FnMut() -> Result<()>,
+    mut wait: impl FnMut(Duration, &AtomicBool),
+) -> Result<()> {
+    let mut delay = Duration::from_secs(5);
+    while !stop.load(Ordering::Acquire) {
+        let started = Instant::now();
+        let result = catch_unwind(AssertUnwindSafe(&mut attempt)).unwrap_or_else(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic");
+            Err(anyhow::anyhow!("mining coordinator panicked: {message}"))
+        });
+        if stop.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let Err(error) = result else {
+            // API stop, signal, or successful completion is intentional.
+            return Ok(());
+        };
+        if !recover {
+            return Err(error);
+        }
+        if started.elapsed() >= Duration::from_secs(60) {
+            delay = Duration::from_secs(5);
+        }
+        crate::status!(
+            "[runtime] {error:#}; rebuilding mining session in {}s",
+            delay.as_secs()
+        );
+        wait(delay, stop);
+        delay = (delay * 2).min(Duration::from_secs(60));
+    }
+    Ok(())
+}
+
+pub(crate) fn wait_for_retry(delay: Duration, stop: &AtomicBool) {
+    let deadline = Instant::now() + delay;
+    while !stop.load(Ordering::Acquire) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}
+
+// Join the monitor even when the coordinator unwinds. Detached monitors from
+// previous attempts must never reload configuration or stop a later session.
+struct RuntimeMonitor {
+    control: crate::control::Control,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl RuntimeMonitor {
+    fn finish(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("runtime monitor panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RuntimeMonitor {
+    fn drop(&mut self) {
+        self.control.stop.store(true, Ordering::Release);
+        let _ = self.finish();
+    }
+}
+
+fn run_session(
+    options: &mut Options,
+    cli: &Cli,
+    observed: &mut Option<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
     let mut pool = 0;
     let mut attempts = 0;
-    let mut observed = cli.config.as_ref().and_then(|p| fs::read(p).ok());
     let background = options.background;
     loop {
+        if stop.load(Ordering::Acquire) {
+            return Ok(());
+        }
         if options.watch {
             if let Some(bytes) = cli.config.as_ref().and_then(|p| fs::read(p).ok()) {
                 if observed.as_ref() != Some(&bytes) {
-                    observed = Some(bytes.clone());
-                    match reload_options(&cli, &bytes, background) {
+                    *observed = Some(bytes.clone());
+                    match reload_options(cli, &bytes, background) {
                         Ok(replacement) => {
-                            options = replacement;
+                            *options = replacement;
                             pool = 0;
                             attempts = 0;
                         }
@@ -158,7 +256,7 @@ pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> 
                 }
             }
         }
-        crate::logging::configure(&options)?;
+        crate::logging::configure(options)?;
         crate::randomx::set_thp(options.thp);
         crate::randomx::configure_jit(options.huge_pages_jit, options.prefetch_mode);
         let memory_pool = match options.memory_pool {
@@ -168,11 +266,11 @@ pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> 
                 .len(),
         };
         crate::randomx::set_memory_pool(memory_pool);
-        autosave(&options, &cli)?;
+        autosave(options, cli)?;
         if options.autosave && options.profile.is_none() {
             if let Some(bytes) = cli.config.as_ref().and_then(|p| fs::read(p).ok()) {
-                options = reload_options(&cli, &bytes, background)?;
-                observed = Some(bytes);
+                *options = reload_options(cli, &bytes, background)?;
+                *observed = Some(bytes);
             }
         }
         let local_stop = Arc::new(AtomicBool::new(false));
@@ -191,8 +289,7 @@ pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> 
             thread::Builder::new()
                 .name("runtime-monitor".into())
                 .spawn(move || {
-                    let monitor_control = crate::control::Control::new(local_stop.clone());
-                    let _panic = monitor_control.watch_thread("runtime monitor");
+                    let _panic = control.watch_thread("runtime monitor");
                     let mut previous = old;
                     while !monitor_stop.load(Ordering::Acquire) {
                         if stop.load(Ordering::Acquire) {
@@ -226,6 +323,11 @@ pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> 
                     }
                 })?
         };
+        let mut monitor = RuntimeMonitor {
+            control: control.clone(),
+            stop: monitor_stop,
+            thread: Some(monitor),
+        };
         let mut current = options.clone();
         current.pool = options.pools.get(pool).cloned();
         if options.verbose {
@@ -238,15 +340,12 @@ pub fn run(mut options: Options, cli: Cli, stop: Arc<AtomicBool>) -> Result<()> 
             );
         }
         let result = miner::run_control(current, control);
-        monitor_stop.store(true, Ordering::Release);
-        monitor
-            .join()
-            .map_err(|_| anyhow::anyhow!("runtime monitor panicked"))?;
+        monitor.finish()?;
         if stop.load(Ordering::Acquire) {
             return result;
         }
         if let Some(replacement) = reloaded.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            options = replacement;
+            *options = replacement;
             pool = 0;
             attempts = 0;
             crate::status!("[config] restarting workers with validated configuration");
@@ -301,6 +400,108 @@ fn is_pool_failure(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_rebuilds_after_errors_and_panics_with_bounded_backoff() {
+        struct Released<'a>(&'a AtomicU64);
+        impl Drop for Released<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let stop = AtomicBool::new(false);
+        let released = AtomicU64::new(0);
+        let mut attempts = 0;
+        let mut delays = Vec::new();
+        supervise(
+            &stop,
+            true,
+            || {
+                assert_eq!(released.load(Ordering::Relaxed), attempts);
+                let _resource = Released(&released);
+                attempts += 1;
+                match attempts {
+                    1 => anyhow::bail!("allocate dataset failed"),
+                    2 => panic!("injected coordinator panic"),
+                    3 => anyhow::bail!("pool jobs have inconsistent seeds for 120 seconds"),
+                    4..=7 => anyhow::bail!("RandomX worker failed"),
+                    _ => Ok(()),
+                }
+            },
+            |delay, _| delays.push(delay.as_secs()),
+        )
+        .unwrap();
+        assert_eq!(attempts, 8);
+        assert_eq!(released.load(Ordering::Relaxed), 8);
+        assert_eq!(delays, [5, 10, 20, 40, 60, 60, 60]);
+    }
+
+    #[test]
+    fn explicit_stop_and_finite_failures_do_not_restart() {
+        let stop = AtomicBool::new(false);
+        supervise(
+            &stop,
+            true,
+            || {
+                stop.store(true, Ordering::Release);
+                anyhow::bail!("error racing with shutdown")
+            },
+            |_, _| panic!("must not retry after stop"),
+        )
+        .unwrap();
+        stop.store(false, Ordering::Release);
+        assert!(supervise(
+            &stop,
+            false,
+            || anyhow::bail!("benchmark checksum mismatch"),
+            |_, _| panic!("must not retry a finite check"),
+        )
+        .is_err());
+        supervise(
+            &stop,
+            true,
+            || Ok(()),
+            |_, _| panic!("API stop must complete"),
+        )
+        .unwrap();
+        let started = Instant::now();
+        thread::scope(|s| {
+            s.spawn(|| {
+                thread::sleep(Duration::from_millis(30));
+                stop.store(true, Ordering::Release);
+            });
+            wait_for_retry(Duration::from_secs(60), &stop);
+        });
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn coordinator_unwind_stops_and_joins_its_monitor() {
+        let control = crate::control::Control::new(Arc::new(AtomicBool::new(false)));
+        let finished = Arc::new(AtomicBool::new(false));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let monitor_stop = stop.clone();
+            let worker_control = control.clone();
+            let finished = finished.clone();
+            let _monitor = RuntimeMonitor {
+                control: control.clone(),
+                stop,
+                thread: Some(thread::spawn(move || {
+                    while !monitor_stop.load(Ordering::Acquire) {
+                        thread::yield_now();
+                    }
+                    assert!(worker_control.stopped());
+                    finished.store(true, Ordering::Release);
+                })),
+            };
+            panic!("injected coordinator panic");
+        }));
+        assert!(result.is_err());
+        assert!(control.stopped());
+        assert!(finished.load(Ordering::Acquire));
+    }
+
     #[test]
     fn atomic_configuration_writes_never_publish_partial_json() {
         let path =

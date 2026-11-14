@@ -8,7 +8,7 @@ mod support;
 use anyhow::{ensure, Result};
 use network::{Api, Certificate, Pool, Proxy};
 use serde_json::{json, Value};
-use std::{collections::HashSet, fs, path::Path, thread, time::Duration};
+use std::{collections::HashSet, fs, net::TcpListener, path::Path, thread, time::Duration};
 use support::{miner_command, port, test_cpus, wait_until, write_json, Process, TempDir};
 
 fn binary() -> &'static Path {
@@ -20,6 +20,103 @@ fn shares_ready(data: &Value, threads: u64) -> bool {
         && data["dev_shares"]["accepted"].as_u64().unwrap_or(0) > 0
 }
 
+fn worker_pid(miner: &Process) -> Option<i32> {
+    miner.output().lines().rev().find_map(|line| {
+        line.strip_prefix("[supervisor] started mining process ")?
+            .parse()
+            .ok()
+    })
+}
+
+fn signal_pid(pid: i32, signal: i32) -> Result<()> {
+    // SAFETY: callers use the PID of their live fixture child or its worker.
+    let result = unsafe { libc::kill(pid, signal) };
+    ensure!(
+        result == 0,
+        "signal {pid}: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "foreground supervisor, initialization recovery and killed worker regression"]
+fn automatic_recovery() -> Result<()> {
+    let temp = TempDir::new("recovery")?;
+    let pool = Pool::new(None, false, 0)?;
+    let occupied = TcpListener::bind(("127.0.0.1", 0))?;
+    let api = Api {
+        port: port()?,
+        token: "recovery-token".into(),
+        certificate: None,
+    };
+    let config = temp.0.join("recovery.json");
+    let mut settings = json!({
+        "pools": [{"url": format!("127.0.0.1:{}", pool.port()), "user": "recovery-wallet"}],
+        "cpu": {"rx": [-1], "huge-pages": false},
+        "randomx": {"mode": "light", "numa": false},
+        "http": {"enabled": true, "host": "127.0.0.1", "port": occupied.local_addr()?.port(),
+            "access-token": api.token},
+        "watch": true
+    });
+    write_json(&config, &settings)?;
+    let mut command = miner_command(binary())?;
+    command.arg("-c").arg(&config).arg("--no-proxy");
+    let mut miner = Process::spawn(&mut command, temp.0.join("recovery.log"))?;
+    wait_until(10, || {
+        miner.ensure_running()?;
+        Ok(miner
+            .output()
+            .contains("rebuilding mining session in 5s")
+            .then_some(()))
+    })?;
+    assert!(miner.output().contains("bind HTTP API"));
+    let first = worker_pid(&miner).unwrap();
+    // Fix configuration during recovery backoff; the old port stays occupied.
+    settings["http"]["port"] = json!(api.port);
+    write_json(&config, &settings)?;
+    api.wait_for(&mut miner, 30, |v| shares_ready(v, 1))?;
+    drop(occupied);
+    assert_eq!(
+        worker_pid(&miner),
+        Some(first),
+        "initialization recovery must keep the worker process"
+    );
+
+    // Exercise a real process death, as for an OOM kill; no test hook in production.
+    signal_pid(first, libc::SIGKILL)?;
+    let second = wait_until(20, || {
+        miner.ensure_running()?;
+        Ok(worker_pid(&miner).filter(|pid| *pid != first))
+    })?;
+    api.wait_for(&mut miner, 30, |v| shares_ready(v, 1))?;
+    // Signal only the foreground parent: its control pipe must stop the worker.
+    signal_pid(miner.id() as i32, libc::SIGTERM)?;
+    miner.success(15)?;
+    // SAFETY: signal zero only queries existence of our now-reaped worker PID.
+    let exists = unsafe { libc::kill(second, 0) };
+    assert_eq!(exists, -1, "worker survived parent shutdown");
+
+    let mut miner = Process::spawn(&mut command, temp.0.join("backoff.log"))?;
+    let worker = wait_until(10, || {
+        miner.ensure_running()?;
+        Ok(worker_pid(&miner))
+    })?;
+    signal_pid(worker, libc::SIGKILL)?;
+    wait_until(10, || {
+        miner.ensure_running()?;
+        Ok(miner
+            .output()
+            .contains("restarting mining process in 5s")
+            .then_some(()))
+    })?;
+    signal_pid(miner.id() as i32, libc::SIGTERM)?;
+    miner.success(3)?;
+    assert_eq!(miner.output().matches("started mining process").count(), 1);
+    println!("PASS initialization recovery, killed worker restart, parent-only stop, stop during backoff");
+    Ok(())
+}
+
 #[test]
 #[ignore = "TLS/proxy/share regression; full-memory execution is covered by portable tests"]
 fn protocol_and_fee_windows() -> Result<()> {
@@ -27,7 +124,7 @@ fn protocol_and_fee_windows() -> Result<()> {
     let cert = Certificate::new(&temp.0)?;
     for mode in ["direct-tls", "http-tls", "socks5h-tls", "plain"] {
         let tls = mode != "plain";
-        let mut pool = Pool::new(tls.then_some(&cert), false, 0)?;
+        let pool = Pool::new(tls.then_some(&cert), false, 0)?;
         let proxy = if matches!(mode, "http-tls" | "socks5h-tls") {
             Some(Proxy::new(mode == "socks5h-tls", pool.port())?)
         } else {
@@ -50,7 +147,8 @@ fn protocol_and_fee_windows() -> Result<()> {
                     "cpu": {"rx": cpus, "huge-pages": false},
                     "randomx": {"numa": false, "init": 2, "mode": "light"},
                     "http": {"enabled": true, "host": "127.0.0.1", "port": api.port,
-                        "access-token": api.token, "restricted": true}, "print-time": 0
+                        "access-token": api.token, "restricted": true}, "print-time": 0,
+                    "retries": 100, "retry-pause": 1
                 }),
             )?;
             command.arg("-c").arg(config).arg("--no-proxy");
@@ -74,6 +172,8 @@ fn protocol_and_fee_windows() -> Result<()> {
                 .arg(api.port.to_string())
                 .arg("--http-access-token")
                 .arg(&api.token);
+            // Keep the same engine/API alive throughout the simulated outage.
+            command.args(["--retries", "100", "--retry-pause", "1"]);
             if tls {
                 command
                     .arg("--tls-ca")
@@ -115,16 +215,38 @@ fn protocol_and_fee_windows() -> Result<()> {
                 "duplicate nonce across fee windows"
             );
         }
-        if mode == "plain" {
-            pool.stop();
-            assert!(
-                !miner.wait(10)?.success(),
-                "mandatory developer disconnect must be fatal"
-            );
-        } else {
-            miner.signal(libc::SIGINT)?;
-            miner.success(15)?;
+        if matches!(mode, "plain" | "direct-tls") {
+            pool.set_available(false);
+            wait_until(10, || {
+                miner.ensure_running()?;
+                let status = api.get("/summary")?;
+                Ok((status["paused"] == true
+                    && status["pool"]["connected"] == false
+                    && status["dev_pool"]["connected"] == false)
+                    .then_some(()))
+            })?;
+            // Stay offline through several attempts, beyond the old fatal limit.
+            thread::sleep(Duration::from_secs(3));
+            miner.ensure_running()?;
+            let paused = api.get("/summary")?;
+            let hashes = paused["hashes"].as_u64().unwrap();
+            thread::sleep(Duration::from_secs(1));
+            assert_eq!(api.get("/summary")?["hashes"], hashes);
+            pool.set_available(true);
+            wait_until(20, || {
+                miner.ensure_running()?;
+                let status = api.get("/summary")?;
+                Ok((status["paused"] == false
+                    && status["pool"]["connected"] == true
+                    && status["dev_pool"]["connected"] == true
+                    && status["hashes"].as_u64().unwrap() > hashes
+                    && status["shares"]["accepted"].as_u64()
+                        > paused["shares"]["accepted"].as_u64())
+                .then_some(()))
+            })?;
         }
+        miner.signal(libc::SIGINT)?;
+        miner.success(15)?;
         println!(
             "PASS {mode}: user={} dev={}",
             data["shares"]["accepted"], data["dev_shares"]["accepted"]
@@ -134,7 +256,7 @@ fn protocol_and_fee_windows() -> Result<()> {
 }
 
 #[test]
-#[ignore = "local TLS and mandatory developer-login rejection"]
+#[ignore = "local TLS and developer-login rejection with persistent retries"]
 fn rejected_connections() -> Result<()> {
     let temp = TempDir::new("rejections")?;
     let cert = Certificate::new(&temp.0)?;
@@ -144,7 +266,17 @@ fn rejected_connections() -> Result<()> {
         command
             .arg("-o")
             .arg(format!("stratum+ssl://127.0.0.1:{}", pool.port()))
-            .args(["-u", "test-wallet", "-t", "2", "--no-proxy"]);
+            .args([
+                "-u",
+                "test-wallet",
+                "-t",
+                "2",
+                "--no-proxy",
+                "--retries",
+                "100",
+                "--retry-pause",
+                "1",
+            ]);
         match name {
             "untrusted-cert" => {
                 command.arg("--tls-verify");
@@ -155,15 +287,31 @@ fn rejected_connections() -> Result<()> {
             _ => (),
         }
         let mut miner = Process::spawn(&mut command, temp.0.join(format!("{name}.log")))?;
-        assert!(!miner.wait(25)?.success());
-        assert!(
-            miner
+        wait_until(15, || {
+            miner.ensure_running()?;
+            Ok((miner
                 .output()
-                .contains("required pool connection unavailable"),
+                .matches("[net] developer connection:")
+                .count()
+                >= 3)
+                .then_some(()))
+        })?;
+        assert!(
+            pool.snapshot().shares.is_empty(),
+            "rejected login must not allow mining"
+        );
+        let expected_error = match name {
+            "untrusted-cert" => "UnknownIssuer",
+            "wrong-pin" => "TLS certificate fingerprint mismatch",
+            _ => "pool rejected login",
+        };
+        assert!(
+            miner.output().contains(expected_error),
             "{}",
             miner.output()
         );
-        assert!(!miner.output().contains("developer"), "{}", miner.output());
+        miner.signal(libc::SIGINT)?;
+        miner.success(15)?;
         println!("PASS {name}");
     }
     Ok(())

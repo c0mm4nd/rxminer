@@ -39,9 +39,39 @@ identical automatic CPU selection or identical API responses in other miners.
 
 The first enabled pool is primary; other enabled entries are backups. All
 workers and connections stop before another user pool starts.
+User pools cycle indefinitely, including when only one is configured. Developer
+endpoints also retry indefinitely, rotating after each failed connection with a
+one-second pause. If either connection has no usable job, mining and the fee
+clock pause until both jobs are available again. TLS verification remains in
+effect during retries; connection errors are logged rather than terminating
+the miner after a temporary outage.
 NiceHash support can also be negotiated by the login response.
 Share submissions include `algo: "rx/0"` when the server advertises the `algo`
 extension. Negotiated capabilities are reset on reconnect.
+
+### Automatic recovery
+
+Pool mining runs under a built-in Rust foreground supervisor by default. The
+foreground process manages one mining child; no shell loop or extra daemon flag
+is needed. Both processes use the supplied configuration and proxy settings.
+Retrying a failed proxy never switches the miner to a direct connection.
+
+Initialization failures, worker errors/panics, and jobs whose seeds disagree for
+120 seconds trigger cleanup and reconstruction of the mining session. Repeated
+failures wait 5, 10, 20, 40, then at most 60 seconds between attempts. The delay
+resets after a session has lasted 60 seconds. Old workers, datasets and connection
+threads are released before another session starts.
+
+If the mining child aborts, crashes in native code, or is killed by the OS, the
+foreground supervisor starts a fresh child with the same bounded retry delay.
+Ctrl+C, SIGTERM and an authenticated API `stop` remain intentional shutdowns.
+Stopping only the parent also stops and reaps its child; a child that does not
+respond within 30 seconds is terminated. Losing the parent control pipe requests
+child shutdown. The supervisor itself must remain running to restart a child.
+
+`--background` remains an explicit opt-in. Help, configuration validation and
+finite benchmarks retain their normal completion/error exit statuses; benchmark
+checksum failures are not retried or hidden.
 
 ### Stratum proxies
 
