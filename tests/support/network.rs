@@ -179,13 +179,19 @@ pub struct PoolState {
 pub struct Pool {
     server: Server,
     state: Arc<Mutex<PoolState>>,
+    available: Arc<AtomicBool>,
 }
 impl Pool {
     pub fn new(certificate: Option<&Certificate>, deny_dev: bool, nonce: u32) -> Result<Self> {
         let acceptor = certificate.map(Certificate::acceptor).transpose()?;
         let state = Arc::new(Mutex::new(PoolState::default()));
         let shared = state.clone();
+        let available = Arc::new(AtomicBool::new(true));
+        let serving = available.clone();
         let server = Server::new(move |socket, _| {
+            if !serving.load(Ordering::Acquire) {
+                return Ok(());
+            }
             let connection: Box<dyn Stream> = match &acceptor {
                 Some(tls) => Box::new(StreamOwned::new(
                     ServerConnection::new(tls.clone())?,
@@ -219,6 +225,14 @@ impl Pool {
                             .agents
                             .push(params["agent"].as_str().unwrap_or_default().into());
                         if deny_dev && wallet.starts_with("46fca3") {
+                            writeln!(
+                                connection.get_mut(),
+                                "{}",
+                                json!({
+                                    "id": request["id"], "error": {"code": -1, "message": "login denied"}
+                                })
+                            )?;
+                            connection.get_mut().flush()?;
                             break;
                         }
                         json!({"id": "rxminer-test-rig", "job": job, "status": "OK",
@@ -252,7 +266,11 @@ impl Pool {
             }
             Ok(())
         })?;
-        Ok(Self { server, state })
+        Ok(Self {
+            server,
+            state,
+            available,
+        })
     }
     pub fn port(&self) -> u16 {
         self.server.port
@@ -260,8 +278,13 @@ impl Pool {
     pub fn snapshot(&self) -> PoolState {
         self.state.lock().unwrap().clone()
     }
-    pub fn stop(&mut self) {
-        self.server.stop();
+    pub fn set_available(&self, available: bool) {
+        self.available.store(available, Ordering::Release);
+        if !available {
+            for socket in self.server.connections.sockets.lock().unwrap().iter() {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+        }
     }
 }
 

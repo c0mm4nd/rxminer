@@ -103,6 +103,10 @@ impl Process {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     pub fn ensure_running(&mut self) -> Result<()> {
         if let Some(status) = self.child.try_wait()? {
             bail!("child exited early ({status}):\n{}", self.output());

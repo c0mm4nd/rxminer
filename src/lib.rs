@@ -23,6 +23,7 @@ pub mod topology;
 
 pub mod logging;
 pub mod runtime;
+pub mod supervisor;
 
 pub mod dns;
 

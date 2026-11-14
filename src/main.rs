@@ -1,7 +1,7 @@
 use clap::Parser;
 use rxminer::{
     config::{Cli, Options},
-    runtime,
+    runtime, supervisor,
 };
 use std::{
     process::ExitCode,
@@ -32,10 +32,10 @@ fn main() -> ExitCode {
         };
     }
     if let Err(error) = rxminer::logging::configure(&options) {
-        rxminer::status!("rxminer: {error:#}");
-        return ExitCode::FAILURE;
+        rxminer::status!("[runtime] {error:#}; logging setup will retry");
     }
-    if options.background {
+    let worker = supervisor::is_worker();
+    if options.background && !worker {
         match runtime::background() {
             Ok(true) => return ExitCode::SUCCESS,
             Ok(false) => (),
@@ -50,7 +50,14 @@ fn main() -> ExitCode {
         rxminer::status!("rxminer: install signal handler: {error}");
         return ExitCode::FAILURE;
     }
-    match runtime::run(options, cli, stop) {
+    let result = if worker {
+        supervisor::watch_parent(stop.clone()).and_then(|()| runtime::run(options, cli, stop))
+    } else if options.benchmark.is_none() {
+        supervisor::run(stop)
+    } else {
+        runtime::run(options, cli, stop)
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             rxminer::status!("rxminer: {error:#}");
