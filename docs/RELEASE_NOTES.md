@@ -1,7 +1,26 @@
-# RxMiner v0.2.0-rc.4
+# RxMiner v0.2.0-rc.5
 
-Fourth release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
+Fifth release candidate for v0.2.0, the AI-optimized RandomX miner. This is a
 pre-release for validation before the stable v0.2.0 release.
+
+## Changes since rc.4
+
+- Share Linux transparent huge-page promotion between the Rust and C++ backends
+  through `rx-platform`. Prepare all worker scratchpads before promoting datasets
+  or light-mode caches, keeping the hottest working memory first in line for
+  available huge pages. Temporary full-mode caches are freed before promotion.
+- Run promotion on the corresponding NUMA node before mining starts. Requests
+  are split into chunks with cancellation checks and stop after repeated failures;
+  ordinary pages remain usable on unsupported kernels or under memory pressure.
+- Make `--no-thp` disable both THP advice and synchronous promotion, including
+  explicit `MADV_NOHUGEPAGE` for C++ ordinary mappings. `RXM_COLLAPSE=0` disables
+  synchronous promotion while retaining normal THP advice.
+- Add full/light hash and memory-policy regressions, and package the Rust backend
+  together with its platform dependency in the installation checks.
+
+Promotion may add initialization time. Actual page coverage and throughput depend
+on the host's memory layout and workload; full huge-page coverage is not guaranteed.
+No system-wide kernel settings are changed.
 
 ## Changes since rc.3
 
@@ -41,7 +60,7 @@ pre-release for validation before the stable v0.2.0 release.
 
 Choose the platform and backend in the filename:
 
-`rxminer-v0.2.0-rc.4-<platform>-<rust|cpp>.<tar.gz|zip>`
+`rxminer-v0.2.0-rc.5-<platform>-<rust|cpp>.<tar.gz|zip>`
 
 Both variants are built for Linux x86-64, ARM64 and RV64, macOS Intel and Apple
 Silicon, and Windows x64. Each archive is extracted and tested before upload;
