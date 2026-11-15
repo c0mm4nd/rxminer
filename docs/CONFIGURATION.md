@@ -132,10 +132,18 @@ normally use separate RW and RX aliases; neither alias is writable and executabl
 `randomx.1gb-pages` requests 1 GiB dataset pages on Linux. Failed page reservations
 fall back to smaller pages; status reports the actual allocation. `cpu.thp`
 controls Linux MADV_HUGEPAGE/MADV_NOHUGEPAGE on ordinary mappings and does not
-modify system-wide kernel settings. The low-level allocator also retains the
-C++ diagnostics: `RXM_THP=0` disables THP before any explicit policy is set;
-`RXM_COLLAPSE` requests synchronous population/collapse and `RXM_DEBUG` logs
-its outcome. Miner configuration takes precedence over `RXM_THP`.
+modify system-wide kernel settings. With THP enabled, both backends also try
+to promote initialized datasets, retained light-mode caches and scratchpads
+before mining. All worker scratchpads are prepared first, so dataset promotion
+cannot consume the huge pages needed by these hotter buffers. Full mode also
+releases its temporary cache before promoting the dataset. Promotion runs on the configured NUMA node, in 32 MiB chunks (or one
+native huge page when larger), with cancellation checks; two failed chunks stop that allocation's attempt.
+Unsupported kernels or allocation failures keep ordinary pages usable. This
+may increase initialization time, and cannot guarantee full THP coverage.
+`RXM_COLLAPSE=0` disables synchronous promotion while retaining THP advice;
+`RXM_DEBUG` logs promotion errors. `RXM_THP=0` disables THP before any explicit
+policy is set; miner configuration takes precedence over `RXM_THP`.
+`--no-thp` disables both THP advice and synchronous promotion.
 `cpu.memory-pool` retains idle scratchpads
 up to the configured capacity, separated by NUMA node and page type; resetting
 the policy releases idle pages. `cpu.huge-pages-jit` requests reserved code pages

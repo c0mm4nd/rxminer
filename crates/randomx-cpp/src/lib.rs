@@ -21,6 +21,17 @@ const JIT: u32 = 8;
 const SECURE: u32 = 16;
 const ARGON2: u32 = 96;
 
+// SAFETY: ptr must reference len live initialized bytes; promotion preserves contents.
+unsafe fn promote_memory(ptr: *mut c_void, len: usize, huge: bool, stop: Option<&AtomicBool>) {
+    // SAFETY: policy query has no pointer arguments or side effects.
+    if huge || len > isize::MAX as usize || unsafe { rxm_thp_enabled() } == 0 {
+        return;
+    }
+    // SAFETY: upheld by each caller before publishing its owned allocation.
+    let memory = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
+    rx_platform::promote_huge_pages(memory, true, stop);
+}
+
 // Each claim covers at most 4 MiB (65,536 dataset items). Faster initializer
 // cores can take more work instead of waiting for a static partition on a slow
 // core. The small number of claims keeps coordination off the inner item loop.
@@ -118,6 +129,10 @@ pub fn set_thp(enabled: bool) {
 }
 
 unsafe extern "C" {
+    fn rxm_thp_enabled() -> libc::c_int;
+    fn rxm_scratchpad(vm: *mut c_void) -> *mut c_void;
+    fn randomx_get_cache_memory(cache: *mut c_void) -> *mut c_void;
+    fn randomx_get_dataset_memory(dataset: *mut c_void) -> *mut c_void;
     fn rxm_set_memory_pool(pages: usize);
     fn rxm_set_allocator_node(node: libc::c_int);
     fn rxm_set_thp(enabled: libc::c_int);
@@ -274,6 +289,30 @@ impl Dataset {
             giga_pages: false,
             huge_pages: cache_huge,
         })
+    }
+
+    /// Best-effort promotion after all worker scratchpads have been prepared.
+    /// Run on the dataset's NUMA node; contents and live VMs remain unchanged.
+    pub fn promote_pages(&self, stop: &AtomicBool) {
+        // SAFETY: this owner retains the complete initialized mapping throughout
+        // the call. Linux promotion preserves contents, including for readers.
+        unsafe {
+            if let Some(ptr) = self.ptr {
+                promote_memory(
+                    randomx_get_dataset_memory(ptr.as_ptr()),
+                    randomx_dataset_item_count() as usize * 64,
+                    self.huge_pages || self.giga_pages,
+                    Some(stop),
+                );
+            } else if let Some(cache) = &self.cache {
+                promote_memory(
+                    randomx_get_cache_memory(cache.0.as_ptr()),
+                    256 << 20,
+                    cache.1,
+                    Some(stop),
+                );
+            }
+        }
     }
 
     pub fn uses_huge_pages(&self) -> bool {
@@ -443,8 +482,19 @@ impl Vm {
             // SAFETY: identical live data, retry only the optional page preference.
             ptr = unsafe { randomx_create_vm(options, cache, data) };
         }
+        let ptr = NonNull::new(ptr).context("create RandomX VM")?;
+        // SAFETY: the new VM exclusively owns a mapped, initialized 2 MiB
+        // scratchpad. The caller has already selected this worker's NUMA node.
+        unsafe {
+            promote_memory(
+                rxm_scratchpad(ptr.as_ptr()),
+                2 << 20,
+                options & LARGE_PAGES != 0,
+                None,
+            );
+        }
         Ok(Self {
-            ptr: NonNull::new(ptr).context("create RandomX VM")?,
+            ptr,
             dataset,
             tuning,
             huge_pages: options & LARGE_PAGES != 0,

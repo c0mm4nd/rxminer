@@ -182,6 +182,18 @@ impl Dataset {
             Storage::Full(v) => v.page_size(),
         }
     }
+    /// Best-effort promotion after all worker scratchpads have been prepared.
+    /// Run on the dataset's NUMA node; contents and live VMs remain unchanged.
+    pub fn promote_pages(&self, stop: &AtomicBool) {
+        let (words, page_size) = match &self.storage {
+            Storage::Full(data) => (data.words(), data.page_size()),
+            Storage::Light(cache) => (cache.words(), cache.page_size()),
+        };
+        if page_size < 2 << 20 {
+            rx_platform::promote_huge_pages(words, memory::thp_enabled(), Some(stop));
+        }
+    }
+
     pub fn uses_huge_pages(&self) -> bool {
         self.page_size() == 2 << 20
     }
@@ -288,7 +300,7 @@ impl Dataset {
                         storage: Storage::Full(Arc::new(dataset)),
                         tuning,
                         huge_pages,
-                    })
+                    });
                 }
                 Err(_error) if tuning.mode == MemoryMode::Auto && !stop.load(Ordering::Relaxed) => {
                 }

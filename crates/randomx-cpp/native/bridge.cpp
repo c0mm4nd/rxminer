@@ -2,6 +2,9 @@
 // Rust ownership boundary for the bundled RandomX implementation.
 #include "randomx.h"
 #include "virtual_machine.hpp"
+extern "C" const void* rxm_scratchpad(randomx_vm* vm) noexcept {
+    return vm->getScratchpad();
+}
 #include <cfenv>
 #if defined(__SSE2__) || defined(_M_X64)
 #include <xmmintrin.h>

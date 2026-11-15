@@ -171,20 +171,6 @@ impl Mapping {
                     unsafe {
                         libc::madvise(pointer.cast(), len, advice);
                     }
-                    if len >= HUGE && std::env::var_os("RXM_COLLAPSE").is_some() {
-                        // SAFETY: both calls advise our complete writable ordinary mapping.
-                        // Linux UAPI MADV_COLLAPSE=25; older kernels may reject it.
-                        let (populate, collapse) = unsafe {
-                            (
-                                libc::madvise(pointer.cast(), len, libc::MADV_POPULATE_WRITE),
-                                libc::madvise(pointer.cast(), len, 25),
-                            )
-                        };
-                        let error = (collapse != 0).then(io::Error::last_os_error);
-                        if std::env::var_os("RXM_DEBUG").is_some() {
-                            eprintln!("rxm: mem={pointer:p} populate={populate} collapse={collapse} error={error:?} bytes={len}");
-                        }
-                    }
                 }
             }
             Ok(out)
@@ -333,8 +319,7 @@ pub fn set_pool(capacity: usize) {
     pool.capacity = capacity;
     pool.epoch = pool.epoch.wrapping_add(1);
 }
-#[cfg(target_os = "linux")]
-fn thp_enabled() -> bool {
+pub(crate) fn thp_enabled() -> bool {
     match THP.load(Ordering::Relaxed) {
         -1 => std::env::var_os("RXM_THP")
             .is_none_or(|value| !value.as_encoded_bytes().starts_with(b"0")),
@@ -387,6 +372,12 @@ impl Scratchpad {
         } else {
             return Err(io::Error::other("scratchpad allocation failed"));
         };
+        if mapping.kind == PageKind::Ordinary {
+            // SAFETY: exclusively owned, zero-initialized or pooled scratchpad;
+            // the mapping is exactly HUGE bytes and no reader has been created.
+            let bytes = unsafe { std::slice::from_raw_parts_mut(mapping.pointer.as_ptr(), HUGE) };
+            rx_platform::promote_huge_pages(bytes, thp_enabled(), None);
+        }
         Ok(Self {
             mapping: Some(mapping),
             node,

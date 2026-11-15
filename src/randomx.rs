@@ -61,6 +61,16 @@ impl Dataset {
     pub fn is_light(&self) -> bool {
         self.0.is_light()
     }
+    pub fn promote_pages(&self, core: &Core, node: Option<usize>, stop: &AtomicBool) -> Result<()> {
+        if core.pinned {
+            topology::pin(core.cpu).context("pin THP promotion thread")?;
+        }
+        if let Some(node) = node {
+            topology::bind_node(node).context("bind THP promotion memory")?;
+        }
+        self.0.promote_pages(stop);
+        Ok(())
+    }
     pub fn uses_huge_pages(&self) -> bool {
         self.0.uses_huge_pages()
     }

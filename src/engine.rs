@@ -142,6 +142,13 @@ impl Engine {
                 self.stop();
                 return Err(error);
             }
+            // Scratchpads are the hottest memory. Prepare every worker before
+            // datasets can consume the remaining compactable huge pages.
+            self.promote_datasets();
+            if self.control.stopped() {
+                self.stop();
+                anyhow::bail!("dataset promotion interrupted");
+            }
             // Commit only after every worker has successfully created its VM.
             self.seed = Some(job.seed);
             self.stats.nodes.store(self.nodes.len(), Ordering::Relaxed);
@@ -241,6 +248,30 @@ impl Engine {
             self.stop_workers();
         }
         result
+    }
+
+    fn promote_datasets(&self) {
+        thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for node in &self.nodes {
+                let stop = &self.control.stop;
+                match thread::Builder::new()
+                    .name(format!("rx-promote-{:?}", node.node))
+                    .spawn_scoped(scope, move || {
+                        node.dataset.promote_pages(&node.cores[0], node.node, stop)
+                    }) {
+                    Ok(handle) => handles.push(handle),
+                    Err(error) => crate::status!("[rx] THP promotion skipped: {error}"),
+                }
+            }
+            for handle in handles {
+                match handle.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::status!("[rx] THP promotion skipped: {error:#}"),
+                    Err(_) => self.control.fail("THP promotion thread panicked"),
+                }
+            }
+        });
     }
 
     fn try_start_workers(&mut self) -> Result<()> {

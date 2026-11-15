@@ -77,6 +77,11 @@ typedef _Atomic int rxm_atomic;
 
 static rxm_atomic rxm_thp_policy = -1;
 void rxm_set_thp(int enabled) { RXM_STORE(&rxm_thp_policy, enabled != 0); }
+int rxm_thp_enabled(void) {
+	int policy = RXM_LOAD(&rxm_thp_policy);
+	const char *env = getenv("RXM_THP");
+	return policy < 0 ? (env == NULL || env[0] != '0') : policy;
+}
 
 
 
@@ -170,22 +175,7 @@ void* allocMemoryPages(size_t bytes) {
 			mem = (void *) aligned;
 #ifdef __linux__
 			if (keep >= RXM_HUGEPAGE_SIZE) {
-				int policy = RXM_LOAD(&rxm_thp_policy);
-				const char *thp = policy < 0 ? getenv("RXM_THP") : (policy ? "1" : "0");
-				if (thp == NULL || thp[0] != '0')
-					madvise(mem, keep, MADV_HUGEPAGE);
-				if (getenv("RXM_COLLAPSE") != NULL) {
-#ifndef MADV_POPULATE_WRITE
-#define MADV_POPULATE_WRITE 23
-#endif
-#ifndef MADV_COLLAPSE
-#define MADV_COLLAPSE 25
-#endif
-					int pr = madvise(mem, keep, MADV_POPULATE_WRITE);
-					int cr = madvise(mem, keep, MADV_COLLAPSE);
-					if (getenv("RXM_DEBUG") != NULL)
-						fprintf(stderr, "rxm: mem=%p align=%d populate=%d collapse=%d errno=%d bytes=%zu\n", mem, ((uintptr_t)mem % RXM_HUGEPAGE_SIZE) == 0, pr, cr, errno, keep);
-				}
+				madvise(mem, keep, rxm_thp_enabled() ? MADV_HUGEPAGE : MADV_NOHUGEPAGE);
 			}
 #endif
 		}

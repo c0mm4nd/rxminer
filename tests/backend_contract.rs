@@ -47,6 +47,19 @@ fn check(vm: &mut Vm) {
     );
     assert_eq!(hex::encode(vm.last_version(false).unwrap()), EXPECTED[0]);
 }
+
+#[test]
+#[ignore = "2080 MiB dataset; THP promotion with full/light consensus and pipeline checks"]
+fn thp_promotion_preserves_full_and_light_hashes() {
+    backend::set_thp(true);
+    for mode in [MemoryMode::Fast, MemoryMode::Light] {
+        let dataset = data(mode, b"test key 000");
+        let mut vm = Vm::new(dataset.clone()).unwrap();
+        dataset.promote_pages(&AtomicBool::new(false));
+        check(&mut vm);
+    }
+    backend::set_thp(false);
+}
 #[test]
 fn rejects_cancelled_empty_and_failed_setup() {
     let calls = AtomicUsize::new(0);

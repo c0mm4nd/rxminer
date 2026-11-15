@@ -108,28 +108,26 @@ fn cargo_install_without_external_build_tools() -> Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     }
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    for package_name in ["randomx-rust", "rx-platform"] {
-        let mut package = Command::new(&cargo);
-        package
-            .current_dir(root())
-            .args([
-                "package",
-                "-p",
-                package_name,
-                "--locked",
-                "--allow-dirty",
-                "-j",
-                "2",
-                "--target-dir",
-            ])
-            .arg(temp.0.join("package-target"));
-        guarded(&mut package, &guard, &guard_log)?;
-        run(
-            &mut package,
-            temp.0.join(format!("{package_name}-package.log")),
-            900,
-        )?;
-    }
+    // Package the dependency graph together so Cargo can verify the unpublished
+    // platform crate from its archive when building the Rust backend archive.
+    let mut package = Command::new(&cargo);
+    package
+        .current_dir(root())
+        .args([
+            "package",
+            "-p",
+            "rx-platform",
+            "-p",
+            "randomx-rust",
+            "--locked",
+            "--allow-dirty",
+            "-j",
+            "2",
+            "--target-dir",
+        ])
+        .arg(temp.0.join("package-target"));
+    guarded(&mut package, &guard, &guard_log)?;
+    run(&mut package, temp.0.join("crates-package.log"), 900)?;
 
     // Backend and platform crates must be published before a registry package of the miner
     // can resolve them. Verify the standalone Rust crates above, and reproduce

@@ -8,6 +8,7 @@ description = "Pure Rust RandomX v1/v2 with interpreter and x86-64, ARM64 and RV
 [dependencies]
 anyhow = "1"
 libc = "0.2"
+rx-platform = { version = "0.1.0", path = "../rx-platform" }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
 [lints.rust]

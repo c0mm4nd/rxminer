@@ -651,6 +651,7 @@ dependencies = [
  "anyhow",
  "cc",
  "libc",
+ "rx-platform",
 ]
 
 [[package]]
@@ -659,6 +660,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libc",
+ "rx-platform",
  "windows-sys 0.61.2",
 ]
 

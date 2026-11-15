@@ -1,14 +1,17 @@
-//! CPU discovery, worker selection, affinity and operating-system resource limits.
+//! CPU discovery, affinity, operating-system limits and huge-page promotion.
 //!
 //! Linux supports NUMA placement and cgroup limits. Windows discovers CPUs within
 //! the current processor group. macOS exposes unbound worker slots, not pinnable
 //! CPU IDs. This crate has no dependency on a mining algorithm or logging system.
+mod hugepages;
 #[cfg(target_os = "linux")]
 mod topology;
 #[cfg(not(target_os = "linux"))]
 #[path = "topology_portable.rs"]
 mod topology;
 mod topology_common;
+
+pub use hugepages::promote_huge_pages;
 
 pub use topology::{
     affinity, available_memory, bind_node, cpu_quota, discover, pin, select, set_affinity,

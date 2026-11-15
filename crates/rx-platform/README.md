@@ -1,7 +1,7 @@
 # rx-platform
 
 Rust CPU topology, worker selection, affinity, priorities, NUMA binding and
-available CPU/memory queries, independent of RandomX and the miner.
+available CPU/memory queries and best-effort huge-page promotion.
 
 ```rust,no_run
 let cores = rx_platform::discover_with_warning(|error| eprintln!("{error}"))?;
@@ -22,7 +22,14 @@ println!("{}", rx_platform::summary(&workers));
 `available_memory` returns `None` when unknown; `Some(0)` means no headroom.
 OS errors propagate from binding/priority calls. These calls affect the current
 thread or process as supported by the OS; discovering CPUs does not bind them.
-RandomX dataset sizing, replication policy, MSR tuning and logging stay in the
-miner. No build script, C/C++ build dependency or backend feature is required.
+RandomX dataset sizing, replication policy, MSR tuning and mining-status
+reporting stay in the miner. No build script, C/C++ build dependency or backend feature is required.
+
+`promote_huge_pages` tries to promote long-lived writable buffers after NUMA
+placement on Linux, preserving contents and shared readers. Call it after
+preparing higher-priority working buffers. It checks cancellation between chunks, stops after repeated
+allocation failures and is a no-op on other operating systems. The caller must
+pass the THP policy; `RXM_COLLAPSE=0` disables synchronous promotion and
+`RXM_DEBUG` enables allocation diagnostics. Kernel settings are never changed.
 
 Run `cargo test -p rx-platform --release` explicitly when testing the workspace.
